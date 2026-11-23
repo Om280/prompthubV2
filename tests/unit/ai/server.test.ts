@@ -6,19 +6,16 @@ import { ndjsonResponse } from "@/lib/server/ndjson";
 import { AppError } from "@/lib/ai/errors";
 
 describe("readServerEnv", () => {
-  it("exposes booleans and an order, never values", () => {
-    const env = readServerEnv({ ANTHROPIC_API_KEY: "sk-ant-secret", PROVIDER_ORDER: "OPENAI,anthropic,openai" });
-    expect(env).toEqual({
-      keys: { openai: false, anthropic: true, google: false },
-      providerOrder: ["openai", "anthropic", "google"],
-      rateLimitPerMinute: 30,
-    });
+  it("reads only the abuse limits; provider keys, orders and models are not part of the env", () => {
+    const env = readServerEnv({ ANTHROPIC_API_KEY: "sk-ant-secret", PROVIDER_ORDER: "openai", OPENAI_MODEL: "x" });
+    expect(env).toEqual({ rateLimitPerMinute: 30, rateLimitPerUserPerMinute: 20 });
     expect(JSON.stringify(env)).not.toContain("secret");
   });
 
-  it("defaults the order when PROVIDER_ORDER is unset or invalid", () => {
-    expect(readServerEnv({}).providerOrder).toEqual(["anthropic", "openai", "google"]);
-    expect(readServerEnv({ PROVIDER_ORDER: "x,y" }).providerOrder).toEqual(["anthropic", "openai", "google"]);
+  it("reads RATE_LIMIT_PER_USER_PER_MINUTE with the same rules (default 20, clamp to 1)", () => {
+    expect(readServerEnv({ RATE_LIMIT_PER_USER_PER_MINUTE: "5" }).rateLimitPerUserPerMinute).toBe(5);
+    expect(readServerEnv({ RATE_LIMIT_PER_USER_PER_MINUTE: "abc" }).rateLimitPerUserPerMinute).toBe(20);
+    expect(readServerEnv({ RATE_LIMIT_PER_USER_PER_MINUTE: "0" }).rateLimitPerUserPerMinute).toBe(1);
   });
 });
 

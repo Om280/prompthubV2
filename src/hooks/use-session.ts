@@ -396,12 +396,10 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
  * ========================================================================================== */
 
 export interface SessionCallbacks {
-  /** The server answered `ai_required`: the provider list in the UI is out of date. */
+  /** The server answered `ai_required`: the AI status in the UI is out of date. */
   onAiRequired?: () => void;
   /** A version could not be written to history. */
   onPersistError?: () => void;
-  /** The server fell back to another provider before streaming. */
-  onFallback?: (engine: Extract<Engine, { kind: "ai" }>) => void;
   /** A generate/regenerate/transform stream started. */
   onStreamStart?: (activity: Activity, tone?: Tone) => void;
   onAnnounce?: (message: string) => void;
@@ -489,7 +487,6 @@ export function useSession(
           if (signal.aborted) return;
           if (ev.type === "meta") {
             dispatch({ type: "streamMeta", engine: ev.engine });
-            if (ev.engine.kind === "ai" && ev.engine.fellBackFrom?.length) cb.current.onFallback?.(ev.engine);
           } else if (ev.type === "delta") {
             dispatch({ type: "streamDelta", text: ev.text });
           } else if (ev.type === "done") {

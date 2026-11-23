@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, type RefObject } from "react";
-import type { ProvidersResponse } from "@/lib/contracts";
+import type { AiStatusResponse } from "@/lib/contracts";
 import type { PromptHubClient } from "@/lib/client/types";
 import type { HistoryStore } from "@/lib/history/types";
 import type { SessionActions, SessionState } from "@/hooks/use-session";
@@ -18,11 +18,12 @@ export interface CopyState {
 export interface WorkspaceValue {
   client: PromptHubClient;
   history: HistoryStore;
-  providers: ProvidersResponse | null;
+  /** GET /api/providers: AI availability and auth status, null until loaded. */
+  aiStatus: AiStatusResponse | null;
   /** GET /api/providers failed; the indicator offers "Check again". */
-  providersFailed: boolean;
-  reloadProviders: () => void;
-  /** True when the provider list says no AI is configured. */
+  aiStatusFailed: boolean;
+  reloadAiStatus: () => void;
+  /** True when the AI status says the app runs in Basic Mode. */
   basic: boolean;
   /** True only when the dev `?preview=` mock client is active ("Preview data"). */
   preview: boolean;

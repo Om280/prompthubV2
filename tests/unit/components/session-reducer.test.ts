@@ -10,7 +10,7 @@ import type { Engine } from "@/lib/contracts";
 import { DROPPED_MESSAGE } from "@/lib/client/ndjson";
 import { DROPPED_EMPTY_MESSAGE } from "@/hooks/use-session";
 
-const AI: Engine = { kind: "ai", provider: "anthropic", model: "claude-sonnet-5-5" };
+const AI: Engine = { kind: "ai", gateway: "openrouter", model: "anthropic/claude-sonnet-5.5" };
 const run = (s: SessionState, actions: SessionAction[]) => actions.reduce(sessionReducer, s);
 
 const questions = [

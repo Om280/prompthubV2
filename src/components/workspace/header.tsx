@@ -7,6 +7,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { Tip } from "@/components/ui/tooltip";
 import { useTheme } from "@/hooks/use-theme";
 import { cn } from "@/lib/utils";
+import { AccountButton } from "@/components/auth/account-button";
 import { EngineIndicator } from "./engine-indicator";
 import { useWorkspace } from "./workspace-context";
 
@@ -78,6 +79,7 @@ export function Header({ hideBrand = false }: { hideBrand?: boolean }) {
           {theme === "dark" ? <Sun className="size-4" aria-hidden /> : <Moon className="size-4" aria-hidden />}
         </Button>
       </Tip>
+      <AccountButton />
     </header>
   );
 }

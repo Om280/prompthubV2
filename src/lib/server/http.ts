@@ -1,9 +1,9 @@
 /**
- * Route-boundary helpers: body size cap, JSON parsing, Zod validation, rate limiting. Server-only.
+ * Route-boundary helpers: body size cap, JSON parsing, Zod validation. Server-only.
+ * Identity, rate limits and concurrency are in `guard.ts`.
  */
 import type { z } from "zod";
 import { AppError } from "@/lib/ai/errors";
-import { aiRateLimiter, clientKey, type RateLimiter } from "./rate-limit";
 
 export const MAX_BODY_BYTES = 64 * 1024;
 
@@ -60,16 +60,4 @@ export async function parseJsonBody<S extends z.ZodType>(request: Request, schem
     throw new AppError("invalid_request", `Some fields are missing or invalid: ${fields}.`, { issues });
   }
   return result.data;
-}
-
-/** Applies the shared AI-route limiter. Over the limit → 429 rate_limited with retryAfterSec. */
-export function enforceRateLimit(request: Request, limiter: RateLimiter = aiRateLimiter): void {
-  const r = limiter.check(clientKey(request));
-  if (!r.ok) {
-    throw new AppError(
-      "rate_limited",
-      `Too many requests in a short time. Wait ${r.retryAfterSec} second${r.retryAfterSec === 1 ? "" : "s"} and try again.`,
-      { retryAfterSec: r.retryAfterSec },
-    );
-  }
 }

@@ -3,7 +3,7 @@ import type {
   ClarifyRequest,
   ClarifyResponse,
   GenerateRequest,
-  ProvidersResponse,
+  AiStatusResponse,
   StreamEvent,
   TransformRequest,
 } from "@/lib/contracts";
@@ -20,7 +20,8 @@ export interface PromptHubClient {
    * never labels its output as written by an AI provider.
    */
   readonly kind: "mock" | "api";
-  getProviders(): Promise<ProvidersResponse>;
+  /** GET /api/providers: AI availability and auth status. */
+  getAiStatus(): Promise<AiStatusResponse>;
   clarify(req: ClarifyRequest, signal?: AbortSignal): Promise<ClarifyResponse>;
   /** Yields `meta`, then `delta`*, then exactly one `done` or `error`. Stops early when aborted. */
   generate(req: GenerateRequest, signal?: AbortSignal): AsyncIterable<StreamEvent>;

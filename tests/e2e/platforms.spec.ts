@@ -35,7 +35,7 @@ test("7. refinement in Basic Mode: AI-only actions explain themselves, Regenerat
     const btn = page.getByRole("button", { name: new RegExp(`^${name}`) }).first();
     await expect(btn).toHaveAttribute("aria-disabled", "true");
   }
-  await expect(page.getByText(/need an AI provider/).first()).toBeVisible();
+  await expect(page.getByText(/Tone need AI./).first()).toBeVisible();
 
   // Clicking a disabled AI action must not change the prompt or add a version.
   await page.getByRole("button", { name: /^Improve/ }).first().click({ force: true });

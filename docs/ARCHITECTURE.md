@@ -125,6 +125,9 @@ under `docs/reviews/`.
 
 ## 5. Server / AI architecture
 
+> **Superseded in part (feature/auth):** the multi-provider registry, owner-held provider keys,
+> `PROVIDER_ORDER` and `*_MODEL` described below were removed; see §7a. The lead is revising the AI plan.
+
 - `lib/server/env.ts` reads and validates server env with Zod. It imports `server-only`, so importing it
   from a client file fails the build.
 - `registry.ts` builds `ProviderAdapter` objects only for providers whose key is present:
@@ -191,6 +194,45 @@ under `docs/reviews/`.
 - Zod validation at every route boundary; input size caps; JSON body limit 64 KB.
 - No provider error bodies are forwarded to the client verbatim; messages are mapped.
 - CSP and security headers set in `next.config.ts` at Phase 6.
+
+## 7a. Auth and abuse prevention
+
+Added with Google sign-in (feature/auth). Setup: `docs/AUTH_SETUP.md`.
+
+- **Supabase Auth, Google only, PKCE, SSR cookies.** `src/lib/supabase/{config,client,server,proxy}.ts`.
+  `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` are public by design and
+  inlined at build. There is no service-role or secret key. If either is missing, auth is "not
+  configured": Basic Mode works and Sign in is disabled with the reason.
+- **Proxy** (`src/proxy.ts`, Next 16's renamed middleware, Node runtime): on every page and API request
+  (static assets excluded) it creates a per-request server client and calls `getClaims()`, which
+  refreshes the session cookie when needed. It also redirects signed-out visitors from `/account`.
+  It's a no-op when auth isn't configured.
+- **Identity** is only `getVerifiedUser()` (`src/lib/server/auth.ts`). It calls `getClaims()`, which
+  verifies the JWT signature against the project's JWKS (or the Auth server for symmetric keys) and
+  its expiry. `getSession()`'s user, `x-user-id`-style headers and ids in bodies are never trusted.
+  Expired, forged and missing sessions are all "signed out".
+- **Routes:** `/auth/callback` (code exchange; same-origin, path-only `next`), `POST /auth/signout`
+  (same-origin check), `GET /api/session` (verified user for the UI), `/account` (server component
+  behind Suspense, because Cache Components makes the cookie read request-time).
+- **Guards** (`src/lib/server/guard.ts`). Every AI route must call `guardAiRoute(request)` first:
+  auth (401 `auth_required`) → per-user window → per-IP window → concurrency (max 2 in flight per
+  user) → 429s. Public Basic Mode routes call `guardPublicRoute(request)`: per-IP → per-user when
+  signed in → concurrency (per user, or per IP when signed out). Both return a lease whose idempotent
+  `release()` runs on completion, error, stream cancel and request abort (`ndjsonResponse` takes it
+  as `onFinish`). `/api/transform` is the only AI route today.
+- **Limits** are in-memory per instance (best-effort on serverless): `RATE_LIMIT_PER_MINUTE` (30),
+  `RATE_LIMIT_PER_USER_PER_MINUTE` (20), concurrency 2, body 64 KB.
+- **Logging:** `logServerError` (`src/lib/server/log.ts`) passes every line through `redact()`, which
+  masks bearer tokens, JWTs and key-like strings. Provider and auth error bodies are never forwarded
+  to the client.
+- **History** stays in IndexedDB on the device. Signing in doesn't sync or upload it.
+- **Tests:** unit tests mock the Supabase client at `getClaims`/route level. E2E runs the real PKCE
+  flow against `tests/e2e/fake-supabase` (ES256-signed tokens, JWKS, refresh, logout), started by
+  Playwright's `webServer` array.
+- AI billing: no owner-funded multi-provider keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+  `PROVIDER_ORDER`, `*_MODEL` were removed). The AI plan is being revised by the lead. Some
+  user-key scaffolding from an earlier plan remains (`src/lib/client/ai-key.ts`,
+  `src/lib/server/user-key.ts`) pending that revision.
 
 ## 8. Design system
 

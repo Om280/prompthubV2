@@ -6,8 +6,7 @@ import type {
   Engine,
   GenerateRequest,
   Length,
-  ProviderId,
-  ProvidersResponse,
+  AiStatusResponse,
   StreamEvent,
   Tone,
   TransformRequest,
@@ -24,8 +23,6 @@ import { pickBrief } from "./briefs";
 
 export interface MockOptions {
   mode?: "ai" | "basic";
-  /** Providers whose keys are "present" but unusable (ProvidersResponse.detected). */
-  detected?: ProviderId[];
   /** Return this error from the next clarify/generate/transform call, once. */
   failNext?: ApiError;
   /** Multiplies every delay. 0 makes the mock instant (tests). */
@@ -33,7 +30,7 @@ export interface MockOptions {
   today?: string;
 }
 
-const MOCK_ENGINE: Engine = { kind: "ai", provider: "anthropic", model: "claude-sonnet-5-5" };
+const MOCK_ENGINE: Engine = { kind: "ai", gateway: "openrouter", model: "anthropic/claude-sonnet-5.5" };
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -130,17 +127,23 @@ export function createMockClient(options: MockOptions = {}): PromptHubClient {
   return {
     kind: "mock",
 
-    async getProviders(): Promise<ProvidersResponse> {
+    async getAiStatus(): Promise<AiStatusResponse> {
       await sleep(120 * speed);
-      if (mode === "basic") return { mode: "basic", providers: [], default: null, detected: options.detected ?? [] };
+      if (mode === "basic") {
+        return {
+          mode: "basic",
+          ai: {
+            gateway: "openrouter",
+            status: "unavailable",
+            message: "AI generation with your own OpenRouter key is coming in a later update.",
+          },
+          auth: { configured: false, signedIn: false },
+        };
+      }
       return {
         mode: "ai",
-        providers: [
-          { id: "anthropic", label: "Anthropic", model: "claude-sonnet-5-5" },
-          { id: "openai", label: "OpenAI", model: "gpt-5.5" },
-        ],
-        default: "anthropic",
-        detected: [],
+        ai: { gateway: "openrouter", status: "ready", message: "Sample AI status from the dev preview." },
+        auth: { configured: true, signedIn: true },
       };
     },
 
@@ -183,10 +186,9 @@ export function createMockClient(options: MockOptions = {}): PromptHubClient {
 export const PROVIDER_UNAVAILABLE_ERROR: ApiError = {
   code: "provider_unavailable",
   message: "No provider could complete this request. Try again in a minute.",
-  attempted: ["anthropic", "openai"],
 };
 
 export const AI_REQUIRED_ERROR: ApiError = {
   code: "ai_required",
-  message: "Improve, Shorten, Expand and Tone need an AI provider. Add an API key to the server to turn them on.",
+  message: "Improve, Shorten, Expand and Tone need AI. AI with your own OpenRouter key is coming in a later update.",
 };

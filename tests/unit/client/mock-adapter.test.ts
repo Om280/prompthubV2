@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { StreamEvent as StreamEventSchema, ClarifyResponse, ProvidersResponse } from "@/lib/contracts/schemas";
+import { StreamEvent as StreamEventSchema, ClarifyResponse, AiStatusResponse } from "@/lib/contracts/schemas";
 import type { StreamEvent } from "@/lib/contracts";
 import { chunkText, createMockClient, PROVIDER_UNAVAILABLE_ERROR } from "@/lib/mock/adapter";
 import { pickBrief } from "@/lib/mock/briefs";
@@ -17,8 +17,8 @@ describe("mock client", () => {
     expect(client.kind).toBe("mock");
   });
 
-  it("returns contract-valid providers and clarify responses", async () => {
-    expect(ProvidersResponse.safeParse(await client.getProviders()).success).toBe(true);
+  it("returns contract-valid AI status and clarify responses", async () => {
+    expect(AiStatusResponse.safeParse(await client.getAiStatus()).success).toBe(true);
     const res = await client.clarify({ idea: "email my landlord about the heater", target: "claude", length: "balanced" });
     expect(ClarifyResponse.safeParse(res).success).toBe(true);
     expect(res.questions.length).toBeGreaterThan(0);

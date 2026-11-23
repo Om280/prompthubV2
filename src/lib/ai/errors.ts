@@ -3,11 +3,14 @@
  * Messages are user-facing and specific; they never include provider internals or env values.
  */
 import type { ApiError, ApiErrorCode } from "@/lib/contracts";
+import { logServerError } from "@/lib/server/log";
 
 export const STATUS_FOR: Record<ApiErrorCode, number> = {
   invalid_request: 400,
+  auth_required: 401,
   ai_required: 409,
   rate_limited: 429,
+  too_many_concurrent: 429,
   provider_unavailable: 502,
   invalid_output: 502,
   internal: 500,
@@ -35,12 +38,16 @@ export const INTERNAL_MESSAGE =
   "Something went wrong on the server. Try again, and reload the page if it keeps happening.";
 
 export const AI_REQUIRED_MESSAGE =
-  "Improve, Shorten, Expand and Tone need an AI provider. This build runs in Basic Mode.";
+  "Improve, Shorten, Expand and Tone need AI. AI with your own OpenRouter key is coming in a later update.";
+
+export const AUTH_REQUIRED_MESSAGE = "Sign in with Google to use AI features.";
+export const AUTH_NOT_CONFIGURED_MESSAGE =
+  "AI features need you to sign in, and sign-in isn't set up on this server yet.";
 
 export function toAppError(err: unknown): AppError {
   if (err instanceof AppError) return err;
-  // Log a minimal, key-free description server-side; never forward it to the client.
-  console.error("[prompthub] unhandled server error:", err instanceof Error ? `${err.name}: ${err.message}` : typeof err);
+  // Log a minimal, redacted description server-side; never forward it to the client.
+  logServerError("unhandled server error", err);
   return new AppError("internal", INTERNAL_MESSAGE);
 }
 

@@ -6,7 +6,7 @@ const MIN = 60_000;
 const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
 
-const ENGINE: Engine = { kind: "ai", provider: "anthropic", model: "claude-sonnet-5-5" };
+const ENGINE: Engine = { kind: "ai", gateway: "openrouter", model: "anthropic/claude-sonnet-5.5" };
 
 interface SeedSpec {
   key: string;

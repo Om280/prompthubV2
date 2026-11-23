@@ -1,7 +1,7 @@
 # PromptHub — API Contracts
 
-Status: Phase 0, **frozen**. Changes require lead sign-off and must be made in
-`src/lib/contracts/schemas.ts` and this file in the same change.
+Status: Phase 0, **frozen**; revised for auth and abuse limits (v1.2, lead-authorised). Changes require
+lead sign-off and must be made in `src/lib/contracts/schemas.ts` and this file in the same change.
 
 All routes run on the Node.js runtime (the default; with `cacheComponents: true` Next 16 disallows a `runtime` export, so none is declared) and are same-origin. Request bodies are JSON (≤ 64 KB) and are validated
 with the Zod schemas named below. Field names are identical in TypeScript (`z.infer`).
@@ -10,14 +10,14 @@ with the Zod schemas named below. Field names are identical in TypeScript (`z.in
 
 ```ts
 type TargetPlatform = 'chatgpt' | 'claude' | 'gemini';      // how the prompt is written
-type ProviderId     = 'openai' | 'anthropic' | 'google';     // who writes it
 type Length         = 'concise' | 'balanced' | 'detailed';
 type Tone           = 'neutral' | 'friendly' | 'professional' | 'direct' | 'playful';
 type TransformAction = 'improve' | 'shorten' | 'expand' | 'tone';
 // 'regenerate' is not a transform: it re-calls /api/generate with the original inputs.
 
 type Engine =
-  | { kind: 'ai'; provider: ProviderId; model: string; fellBackFrom?: ProviderId[] }
+  | { kind: 'ai'; gateway: 'openrouter'; model: string }   // provisional, see §2
+
   | { kind: 'basic' };
 
 interface ClarifyingQuestion {
@@ -34,26 +34,46 @@ interface GenerationInput {
   target: TargetPlatform;
   length: Length;
   answers: Answer[];          // 0–4
-  preferredProvider?: ProviderId;
 }
+// v1.2: `preferredProvider` was removed; unknown fields are stripped by validation.
 ```
 
 ## 2. `GET /api/providers`
 
-Reports which engines are available. It never includes keys or key fragments.
+Reports whether AI is available to this visitor and the auth status. It never includes keys, tokens or
+user details. Revised with auth (v1.2): there are no owner-funded AI keys and no provider list.
+
+> **Provisional.** The `ai.gateway` / `ai.status` shape below reflects the earlier "user's own
+> OpenRouter key" plan. The product owner has since changed the AI plan (owner's free-tier Gemini key
+> only), and the lead will revise this section. `auth` and `mode` are expected to stay.
 
 ```ts
 // 200
-interface ProvidersResponse {
-  mode: 'ai' | 'basic';                     // 'basic' iff providers.length === 0
-  providers: { id: ProviderId; label: string; model: string }[];  // configured only, in fallback order
-  default: ProviderId | null;
-  detected: ProviderId[];   // v1.1: keys present but provider not usable by this build (Phase 2); [] otherwise
+interface AiStatusResponse {
+  mode: 'basic' | 'ai';            // 'basic' unless ai.status === 'ready' (always 'basic' in this build)
+  ai: {
+    gateway: 'openrouter';         // provisional, see note
+    status: 'unavailable' | 'sign-in-required' | 'key-required' | 'ready'; // 'unavailable' in this build
+    message: string;               // user-facing explanation
+  };
+  auth: {
+    configured: boolean;           // Supabase Auth is configured on this server
+    signedIn: boolean;             // the request's session verified on the server (getClaims)
+  };
 }
 ```
 
-Phase 2 note: no provider adapters exist yet, so `mode` is always `'basic'`. `detected` lists keys that
-were found, so the UI can say AI isn't connected in this build rather than claiming no key is set.
+## 2a. `GET /api/session`
+
+The verified user for this request, from the access token's verified claims (`getClaims()`), or null.
+Signed out, expired and forged sessions all read as `user: null`. Never returns tokens.
+`Cache-Control: private, no-store`.
+
+```ts
+interface AuthUser { id: string; email: string | null; name: string | null; avatarUrl: string | null }
+// 200
+interface SessionResponse { configured: boolean; user: AuthUser | null }
+```
 
 ### Basic Mode behaviour (Phase 2)
 
@@ -61,7 +81,7 @@ were found, so the UI can say AI isn't connected in this build rather than claim
   skipping anything the idea already answers); `engine: { kind: 'basic' }`.
 - `/api/generate`: the stream is `meta` (engine basic), **one** `delta` with the whole text, then
   `done`. The template is instant, so there is no artificial typing delay.
-- `/api/transform`: `409 ai_required` for improve, shorten, expand and tone. Regenerate goes through
+- `/api/transform`: `401 auth_required` when signed out; `409 ai_required` for a signed-in user (improve, shorten, expand and tone). Regenerate goes through
   `/api/generate` and is deterministic: the same idea, answers and settings give the same text.
 
 ## 3. `POST /api/clarify`
@@ -114,12 +134,13 @@ interface TransformRequest {
   length: Length;            // informs Shorten/Expand budgets
   tone?: Tone;               // required iff action === 'tone'
   idea?: string;             // original idea, for context
-  preferredProvider?: ProviderId;
 }
 ```
 
-In Basic Mode `/api/transform` returns `409 { error: { code: 'ai_required', … } }` and the UI keeps
-these actions disabled.
+`/api/transform` is the only AI-only route. It calls `guardAiRoute` first: signed out (or expired,
+forged, or auth not configured) → `401 auth_required` ("Sign in with Google to use AI features."),
+before body validation. A signed-in user gets the usual validation, then in Basic Mode
+`409 { error: { code: 'ai_required', … } }`; the UI keeps these actions disabled.
 
 ## 5. Errors
 
@@ -128,18 +149,31 @@ Non-stream errors use HTTP status + body `{ error: ApiError }`. Stream errors us
 ```ts
 interface ApiError {
   code:
-    | 'invalid_request'      // 400, Zod failure; `issues` included
+    | 'invalid_request'      // 400, Zod failure; `issues` included (413 for an oversize body, 403 for a cross-origin sign-out)
+    | 'auth_required'        // 401, AI route without a verified session
     | 'ai_required'          // 409, action needs a configured provider
-    | 'rate_limited'         // 429, our limiter, or every provider rate-limited; `retryAfterSec`
+    | 'rate_limited'         // 429, per-IP or per-user window; `retryAfterSec` + `Retry-After` header
+    | 'too_many_concurrent'  // 429, already 2 requests in flight for this user (per IP when signed out)
     | 'provider_unavailable' // 502, all providers failed (network/5xx/auth/timeout)
     | 'invalid_output'       // 502, model output failed validation after repair and fallback
     | 'internal';            // 500
   message: string;           // user-facing, specific, no provider internals
   retryAfterSec?: number;
-  attempted?: ProviderId[];  // providers tried, in order
   issues?: { path: string; message: string }[];
 }
 ```
+
+### Limits (all API routes)
+
+| Limit | Applies to | Default | Error |
+| --- | --- | --- | --- |
+| Body size | every POST | 64 KB | 413 `invalid_request` |
+| Per IP | clarify, generate, transform | `RATE_LIMIT_PER_MINUTE` = 30/min | 429 `rate_limited` |
+| Per verified user | transform; clarify and generate when signed in | `RATE_LIMIT_PER_USER_PER_MINUTE` = 20/min | 429 `rate_limited` |
+| In flight | all three; per user, per IP when signed out | 2 | 429 `too_many_concurrent`: "You already have 2 requests running. Wait for one to finish." |
+
+Limits are in-memory per server instance (best-effort). A concurrency slot is released when the
+response completes, errors, or the client aborts.
 
 ## 6. Client storage contract (IndexedDB `prompthub` v1)
 
@@ -175,3 +209,16 @@ interface VersionRecord {
 
 Schema migrations bump the DB version and must have an `upgrade` path plus a test that seeds v(n-1)
 data.
+
+## 7. Auth routes (not under `/api`)
+
+- `GET /auth/callback?code=…&next=…`: OAuth (PKCE) return leg. Exchanges the code
+  (`exchangeCodeForSession`), sets session cookies, 303 to `next`. `next` must be a same-origin path
+  (one leading `/`, no `//`, no backslash, no control characters); anything else becomes `/`. On
+  failure, 303 to `/?auth_error=<code>` with `code` ∈ `missing_code | exchange_failed | access_denied |
+  provider_error | not_configured`. The UI maps codes to fixed messages and never reflects query text.
+- `POST /auth/signout`: POST only (405 otherwise). Same-origin only (`Origin` must match, or
+  `Sec-Fetch-Site: same-origin` when `Origin` is absent), else 403. Signs out this browser
+  (`scope: 'local'`), clears `sb-*-auth-token` cookies, then 303 to `/`, or `200 { signedOut: true }`
+  with `Accept: application/json`.
+- `/account`: page. Redirects to `/?signin=required` without a verified session.

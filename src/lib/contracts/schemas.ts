@@ -5,7 +5,8 @@
 import { z } from "zod";
 
 export const TargetPlatform = z.enum(["chatgpt", "claude", "gemini"]);
-export const ProviderId = z.enum(["openai", "anthropic", "google"]);
+/** The only AI gateway. Each signed-in user brings their own OpenRouter key (never the owner's). */
+export const AiGateway = z.literal("openrouter");
 export const Length = z.enum(["concise", "balanced", "detailed"]);
 export const Tone = z.enum(["neutral", "friendly", "professional", "direct", "playful"]);
 export const TransformAction = z.enum(["improve", "shorten", "expand", "tone"]);
@@ -13,9 +14,9 @@ export const TransformAction = z.enum(["improve", "shorten", "expand", "tone"]);
 export const Engine = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("ai"),
-    provider: ProviderId,
+    gateway: AiGateway,
+    /** OpenRouter model id, e.g. "anthropic/claude-sonnet-5.5". */
     model: z.string(),
-    fellBackFrom: z.array(ProviderId).optional(),
   }),
   z.object({ kind: z.literal("basic") }),
 ]);
@@ -38,7 +39,6 @@ export const GenerationInput = z.object({
   target: TargetPlatform,
   length: Length,
   answers: z.array(Answer).max(4),
-  preferredProvider: ProviderId.optional(),
 });
 
 export const ClarifyRequest = GenerationInput.omit({ answers: true });
@@ -52,23 +52,51 @@ export const TransformRequest = z
     length: Length,
     tone: Tone.optional(),
     idea: z.string().max(4000).optional(),
-    preferredProvider: ProviderId.optional(),
   })
   .refine((r) => (r.action === "tone") === (r.tone !== undefined), {
     message: "tone is required when action is 'tone', and only then",
     path: ["tone"],
   });
 
-export const ProvidersResponse = z.object({
-  mode: z.enum(["ai", "basic"]),
-  providers: z.array(z.object({ id: ProviderId, label: z.string(), model: z.string() })),
-  default: ProviderId.nullable(),
-  /**
-   * Providers whose API key is present in the server environment but which this build cannot use
-   * (no adapter yet, Phase 2). Lets the UI say "keys found, AI not connected yet" instead of
-   * "no provider set up". Never contains key values.
-   */
-  detected: z.array(ProviderId).default([]),
+/**
+ * Why AI is or isn't available to this visitor. AI runs only through the user's own OpenRouter key:
+ * - `unavailable`: this build has no AI generation yet;
+ * - `sign-in-required`: AI exists but the visitor isn't signed in;
+ * - `key-required`: signed in, but no OpenRouter key is connected for this session;
+ * - `ready`: signed in with a key.
+ */
+export const AiStatus = z.enum(["unavailable", "sign-in-required", "key-required", "ready"]);
+
+/** GET /api/providers */
+export const AiStatusResponse = z.object({
+  /** 'basic' unless `ai.status` is 'ready'. */
+  mode: z.enum(["basic", "ai"]),
+  ai: z.object({
+    gateway: AiGateway,
+    status: AiStatus,
+    /** User-facing explanation of `status`. */
+    message: z.string(),
+  }),
+  auth: z.object({
+    /** Supabase Auth is configured on this server, so sign-in can work. */
+    configured: z.boolean(),
+    /** The request carried a session that verified on the server. */
+    signedIn: z.boolean(),
+  }),
+});
+
+/** A verified user, read from the access token's verified claims (never from client-sent ids). */
+export const AuthUser = z.object({
+  id: z.string().min(1),
+  email: z.string().nullable(),
+  name: z.string().nullable(),
+  avatarUrl: z.string().nullable(),
+});
+
+/** GET /api/session */
+export const SessionResponse = z.object({
+  configured: z.boolean(),
+  user: AuthUser.nullable(),
 });
 
 export const ClarifyResponse = z.object({
@@ -78,8 +106,10 @@ export const ClarifyResponse = z.object({
 
 export const ApiErrorCode = z.enum([
   "invalid_request",
+  "auth_required",
   "ai_required",
   "rate_limited",
+  "too_many_concurrent",
   "provider_unavailable",
   "invalid_output",
   "internal",
@@ -89,7 +119,6 @@ export const ApiError = z.object({
   code: ApiErrorCode,
   message: z.string(),
   retryAfterSec: z.number().int().nonnegative().optional(),
-  attempted: z.array(ProviderId).optional(),
   issues: z.array(z.object({ path: z.string(), message: z.string() })).optional(),
 });
 

@@ -1,10 +1,41 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { schemas, type StreamEvent } from "@/lib/contracts";
 import { GET as getProviders } from "@/app/api/providers/route";
 import { POST as clarify } from "@/app/api/clarify/route";
 import { POST as generate } from "@/app/api/generate/route";
 import { POST as transform } from "@/app/api/transform/route";
-import { aiRateLimiter } from "@/lib/server/rate-limit";
+import { GET as getSession } from "@/app/api/session/route";
+import { resetGuards } from "@/lib/server/guard";
+import type { VerifiedUser } from "@/lib/server/auth";
+
+// Identity is mocked at the one place it comes from: the verified-claims helper.
+const auth = vi.hoisted(() => ({ user: null as VerifiedUser | null }));
+vi.mock("@/lib/server/auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/server/auth")>()),
+  getVerifiedUser: async () => auth.user,
+}));
+
+const ADA: VerifiedUser = { id: "user-ada", email: "ada@example.com", name: "Ada Lovelace", avatarUrl: null };
+
+const SUPABASE_ENV = {
+  NEXT_PUBLIC_SUPABASE_URL: "http://127.0.0.1:54321",
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: "sb_publishable_test",
+};
+const savedEnv: Record<string, string | undefined> = {};
+function configureAuth(on: boolean) {
+  for (const [k, v] of Object.entries(SUPABASE_ENV)) {
+    if (!(k in savedEnv)) savedEnv[k] = process.env[k];
+    if (on) process.env[k] = v;
+    else delete process.env[k];
+  }
+}
+afterEach(() => {
+  auth.user = null;
+  for (const [k, v] of Object.entries(savedEnv)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+});
 
 let ipCounter = 0;
 /** Unique client IP per request so the shared limiter doesn't interfere between tests. */
@@ -29,7 +60,7 @@ async function readLines(res: Response): Promise<StreamEvent[]> {
 
 const validGenerate = { idea: "plan a 3-day trip to Lisbon", target: "claude", length: "balanced", answers: [] };
 
-beforeEach(() => aiRateLimiter.reset());
+beforeEach(() => resetGuards());
 
 describe("POST /api/generate", () => {
   it("streams NDJSON: first line meta, last line done, exactly one terminal event", async () => {
@@ -119,36 +150,81 @@ describe("POST /api/clarify", () => {
   });
 });
 
+const improve = { action: "improve", text: "Some prompt", target: "claude", length: "balanced" };
+
 describe("POST /api/transform", () => {
-  it("returns 409 ai_required in Basic Mode", async () => {
+  it("signed out → 401 auth_required before anything else", async () => {
+    configureAuth(true);
+    const res = await transform(post("/api/transform", improve));
+    expect(res.status).toBe(401);
+    const { error } = await res.json();
+    expect(schemas.ApiError.safeParse(error).success).toBe(true);
+    expect(error).toEqual({ code: "auth_required", message: "Sign in with Google to use AI features." });
+  });
+
+  it("signed out with an invalid body is still 401 (auth first)", async () => {
+    configureAuth(true);
+    const res = await transform(post("/api/transform", { nope: true }));
+    expect(res.status).toBe(401);
+  });
+
+  it("auth not configured → 401 that says sign-in isn't set up", async () => {
+    configureAuth(false);
+    const res = await transform(post("/api/transform", improve));
+    expect(res.status).toBe(401);
+    expect((await res.json()).error.message).toContain("sign-in isn't set up on this server yet");
+  });
+
+  it("ignores a spoofed x-user-id header and user id in the body", async () => {
+    configureAuth(true);
     const res = await transform(
-      post("/api/transform", { action: "improve", text: "Some prompt", target: "claude", length: "balanced" }),
+      post("/api/transform", { ...improve, userId: ADA.id }, { headers: { "x-user-id": ADA.id } }),
     );
+    expect(res.status).toBe(401);
+  });
+
+  it("signed in → 409 ai_required in Basic Mode", async () => {
+    configureAuth(true);
+    auth.user = ADA;
+    const res = await transform(post("/api/transform", improve));
     expect(res.status).toBe(409);
     const { error } = await res.json();
     expect(error.code).toBe("ai_required");
-    expect(error.message).toContain("Improve, Shorten, Expand and Tone need an AI provider. This build runs in Basic Mode.");
+    expect(error.message).toContain("Improve, Shorten, Expand and Tone need AI.");
+    expect(error.message).not.toMatch(/API key to the server|_API_KEY/);
   });
 
-  it("validates first: tone without action 'tone' → 400", async () => {
+  it("signed in: validates the body: tone without action 'tone' → 400", async () => {
+    configureAuth(true);
+    auth.user = ADA;
     const res = await transform(
       post("/api/transform", { action: "improve", tone: "friendly", text: "x", target: "claude", length: "balanced" }),
     );
     expect(res.status).toBe(400);
     expect((await res.json()).error.issues[0].path).toBe("tone");
   });
+
+  it("signed in: the per-user limit applies across IPs (default 20/min)", async () => {
+    configureAuth(true);
+    auth.user = ADA;
+    for (let i = 0; i < 20; i++) expect((await transform(post("/api/transform", improve))).status).toBe(409);
+    const res = await transform(post("/api/transform", improve));
+    expect(res.status).toBe(429);
+    const { error } = await res.json();
+    expect(error.code).toBe("rate_limited");
+    expect(res.headers.get("retry-after")).toBe(String(error.retryAfterSec));
+  });
 });
 
-describe("GET /api/providers", () => {
-  const KEYS = {
+describe("GET /api/providers (AiStatusResponse)", () => {
+  const LEGACY = {
     OPENAI_API_KEY: "sk-proj-FAKEq7Wx2VALUE1234567890",
     ANTHROPIC_API_KEY: "sk-ant-FAKEz9Kp4VALUE0987654321",
     GEMINI_API_KEY: "AIzaFAKEm3Ry8VALUE1122334455",
   };
   const saved: Record<string, string | undefined> = {};
-
   beforeEach(() => {
-    for (const k of [...Object.keys(KEYS), "PROVIDER_ORDER"]) saved[k] = process.env[k];
+    for (const k of [...Object.keys(LEGACY), "PROVIDER_ORDER"]) saved[k] = process.env[k];
   });
   afterEach(() => {
     for (const [k, v] of Object.entries(saved)) {
@@ -157,31 +233,54 @@ describe("GET /api/providers", () => {
     }
   });
 
-  it("reports Basic Mode with no keys", async () => {
-    for (const k of Object.keys(KEYS)) delete process.env[k];
+  it("reports Basic Mode, AI unavailable, auth not configured", async () => {
+    configureAuth(false);
     const res = await getProviders(new Request("http://localhost/api/providers"));
-    expect(await res.json()).toEqual({ mode: "basic", providers: [], default: null, detected: [] });
+    const body = await res.json();
+    expect(schemas.AiStatusResponse.safeParse(body).success).toBe(true);
+    expect(body).toMatchObject({
+      mode: "basic",
+      ai: { gateway: "openrouter", status: "unavailable" },
+      auth: { configured: false, signedIn: false },
+    });
+    expect(body.ai.message).toMatch(/coming in a later update/);
+    expect(res.headers.get("cache-control")).toContain("no-store");
   });
 
-  it("lists detected providers in PROVIDER_ORDER and never contains key values or fragments", async () => {
-    Object.assign(process.env, KEYS, { PROVIDER_ORDER: "google, openai,bogus" });
-    const res = await getProviders(new Request("http://localhost/api/providers"));
-    const raw = await res.text();
-    const body = JSON.parse(raw);
-    expect(schemas.ProvidersResponse.safeParse(body).success).toBe(true);
-    expect(body).toEqual({ mode: "basic", providers: [], default: null, detected: ["google", "openai", "anthropic"] });
-    for (const v of Object.values(KEYS)) {
-      expect(raw).not.toContain(v);
-      for (let i = 0; i + 8 <= v.length; i += 4) expect(raw).not.toContain(v.slice(i, i + 8));
-    }
-    expect(raw).not.toMatch(/FAKE|sk-|AIza/);
-    expect(res.headers.get("cache-control")).toBe("no-store");
+  it("reports signedIn only from the verified user", async () => {
+    configureAuth(true);
+    const out = await (await getProviders(new Request("http://localhost/api/providers", { headers: { "x-user-id": "x" } }))).json();
+    expect(out.auth).toEqual({ configured: true, signedIn: false });
+    auth.user = ADA;
+    const inn = await (await getProviders(new Request("http://localhost/api/providers"))).json();
+    expect(inn.auth).toEqual({ configured: true, signedIn: true });
+    expect(JSON.stringify(inn)).not.toContain(ADA.email);
   });
 
-  it("treats whitespace-only keys as absent", async () => {
-    for (const k of Object.keys(KEYS)) delete process.env[k];
-    process.env.OPENAI_API_KEY = "   ";
-    const body = await (await getProviders(new Request("http://localhost/api/providers"))).json();
-    expect(body.detected).toEqual([]);
+  it("ignores legacy provider env vars entirely and never echoes them", async () => {
+    configureAuth(false);
+    Object.assign(process.env, LEGACY, { PROVIDER_ORDER: "google,openai" });
+    const raw = await (await getProviders(new Request("http://localhost/api/providers"))).text();
+    expect(JSON.parse(raw).mode).toBe("basic");
+    expect(raw).not.toMatch(/FAKE|sk-|AIza|anthropic|openai|google/);
+  });
+});
+
+describe("GET /api/session", () => {
+  it("configured: null user when signed out, the verified user when signed in", async () => {
+    configureAuth(true);
+    expect(await (await getSession(new Request("http://localhost/api/session"))).json()).toEqual({ configured: true, user: null });
+    auth.user = ADA;
+    const res = await getSession(new Request("http://localhost/api/session"));
+    const body = await res.json();
+    expect(schemas.SessionResponse.safeParse(body).success).toBe(true);
+    expect(body).toEqual({ configured: true, user: ADA });
+    expect(res.headers.get("cache-control")).toContain("no-store");
+  });
+
+  it("not configured: never reports a user", async () => {
+    configureAuth(false);
+    auth.user = ADA;
+    expect(await (await getSession(new Request("http://localhost/api/session"))).json()).toEqual({ configured: false, user: null });
   });
 });
