@@ -52,3 +52,4 @@ next-env.d.ts
 .claude/settings.local.json
 # large third-party skill not used by this project (re-installable via skills-lock.json)
 .claude/skills/design-taste-frontend/
+/.claude/worktrees/
