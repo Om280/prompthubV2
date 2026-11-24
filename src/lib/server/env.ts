@@ -13,7 +13,7 @@
  * supplied, conservative configurable defaults apply (`AI_GLOBAL_RPM` 5, `AI_GLOBAL_TPM` 100,000,
  * `AI_GLOBAL_RPD` 100). These are PromptHub's own safeguards, not Google's limits.
  */
-// import "server-only" is added once the Vitest alias for it exists (see the Gemini report).
+import "server-only";
 import { z } from "zod";
 
 export const DEFAULT_RATE_LIMIT_PER_MINUTE = 30;

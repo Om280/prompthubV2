@@ -34,7 +34,7 @@
  * Identity only ever comes from `getVerifiedUser()`. Headers such as `x-user-id` and ids in the body
  * are ignored.
  */
-// import "server-only" is added once the Vitest alias for it exists (see the Gemini report).
+import "server-only";
 import { createHash, randomUUID } from "node:crypto";
 import { aiCallSignal } from "@/lib/ai/cancellation";
 import {
@@ -107,6 +107,11 @@ export interface AiRouteLease<T> extends RouteLease {
   thinkingLevel: ThinkingLevel;
   /** Corrects the TPM charge with the actual token count. Never throws. */
   reconcileTokens(actualTotalTokens: number): Promise<void>;
+  /**
+   * A repair is a second Gemini request inside one lease. Charges every call beyond the first to
+   * global:rpm and global:rpd, so the app-wide ceilings count real upstream requests. Never throws.
+   */
+  reconcileCalls(calls: number): Promise<void>;
   /** Writes usage metadata (no prompt text). Never throws. */
   recordUsage(usage: AiUsage): Promise<void>;
 }
@@ -302,6 +307,7 @@ export async function guardAiRoute<T>(
 
   const releaseOnce = onAbort(request, release);
   let reconciled = false;
+  let callsReconciled = false;
   return {
     user,
     input,
@@ -322,6 +328,17 @@ export async function guardAiRoute<T>(
         await store.adjust("global:tpm", "minute", reservedAt, Math.max(0, Math.round(actual)) - estimatedTokens);
       } catch (err) {
         logServerError("reconciling AI tokens failed", err);
+      }
+    },
+    async reconcileCalls(calls) {
+      const extra = Math.floor(calls) - 1;
+      if (callsReconciled || replay || !Number.isFinite(extra) || extra <= 0) return;
+      callsReconciled = true;
+      try {
+        await store.adjust("global:rpm", "minute", reservedAt, extra);
+        await store.adjust("global:rpd", "day", reservedAt, extra);
+      } catch (err) {
+        logServerError("charging extra AI calls failed", err);
       }
     },
     async recordUsage(usage) {

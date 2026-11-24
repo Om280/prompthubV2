@@ -206,6 +206,20 @@ describe("AI clarify", () => {
     expect(sanitizeQuestions({ taskType: "creative", questions: [q("Q1?"), q("Q2?"), q("Q3?"), q("Ex?", true)] }, "chatgpt").at(-1)?.question).toBe("Ex?");
   });
 
+  it("a repair charges the extra upstream call to the global RPM/RPD buckets", async () => {
+    const calls: number[] = [];
+    const { lease } = fakeLease({ reconcileCalls: async (n) => void calls.push(n) });
+    const repaired = jsonModel("not json", { taskType: "general", questions: [] });
+    await aiClarify({ idea: "x", target: "chatgpt", length: "balanced" }, lease, deps(repaired));
+    expect(repaired.doGenerateCalls).toHaveLength(2);
+    expect(calls).toEqual([2]);
+
+    const once: number[] = [];
+    const { lease: l2 } = fakeLease({ reconcileCalls: async (n) => void once.push(n) });
+    await aiClarify({ idea: "x", target: "chatgpt", length: "balanced" }, l2, deps(jsonModel({ taskType: "general", questions: [] })));
+    expect(once).toEqual([]);
+  });
+
   it("invalid output → exactly one repair call; still invalid → invalid_output (never Basic Mode)", async () => {
     const good = { taskType: "general", questions: [] };
     const repaired = jsonModel("not json", good);

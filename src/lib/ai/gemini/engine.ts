@@ -31,6 +31,8 @@ export interface EngineLease {
   timeoutMs: number;
   thinkingLevel: ThinkingLevel;
   reconcileTokens(actualTotalTokens: number): Promise<void>;
+  /** Charges Gemini calls beyond the first (a repair) to the global RPM and RPD buckets. */
+  reconcileCalls?(calls: number): Promise<void>;
   recordUsage(usage: AiUsage): Promise<void>;
   release(): void;
 }
@@ -63,6 +65,7 @@ function settler(lease: EngineLease, meter: UsageMeter) {
     done = true;
     try {
       if (meter.known) await lease.reconcileTokens(meter.total);
+      if (meter.calls > 1) await lease.reconcileCalls?.(meter.calls);
       await lease.recordUsage({ ...meter.summary(), status });
     } finally {
       lease.release();

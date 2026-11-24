@@ -53,3 +53,6 @@ next-env.d.ts
 # large third-party skill not used by this project (re-installable via skills-lock.json)
 .claude/skills/design-taste-frontend/
 /.claude/worktrees/
+
+# opt-in Gemini eval reports
+/reports/

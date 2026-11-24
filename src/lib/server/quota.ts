@@ -15,7 +15,7 @@
  * bucket is charged an estimate), and `adjust` reconciles with the actual count afterwards.
  * No prompt text is ever stored: only counters, keys, hashes and usage metadata.
  */
-// import "server-only" is added once the Vitest alias for it exists (see the Gemini report).
+import "server-only";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseConfig } from "@/lib/supabase/config";
 import { windowReset, windowStart, type QuotaWindow } from "./quota-windows";

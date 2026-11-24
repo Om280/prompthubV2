@@ -2,7 +2,7 @@
  * Error mapping to the contract `ApiError` (API_CONTRACTS §5). Server-only.
  * Messages are user-facing and specific; they never include provider internals or env values.
  */
-// import "server-only" is added once the Vitest alias for it exists (see the Gemini report).
+import "server-only";
 import type { ApiError, ApiErrorCode } from "@/lib/contracts";
 import { logServerError } from "@/lib/server/log";
 

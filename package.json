@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node scripts/vitest.mjs run",
     "test:watch": "node scripts/vitest.mjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "eval:gemini": "node scripts/eval-gemini.mjs"
   },
   "dependencies": {
     "@ai-sdk/google": "4.0.114",

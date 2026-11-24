@@ -11,7 +11,7 @@
  * The project's RPM/TPM/RPD are optional: without them, conservative app-wide defaults apply
  * (`globalCeilings`). The status says which.
  */
-// import "server-only" is added once the Vitest alias for it exists (see the Gemini report).
+import "server-only";
 import type { AiStatusResponse } from "@/lib/contracts";
 import { describeCeilings, globalCeilings, readServerEnv, type ServerEnv } from "@/lib/server/env";
 import { isQuotaStoreConfigured, quotaHealth, type QuotaHealth } from "@/lib/server/quota";

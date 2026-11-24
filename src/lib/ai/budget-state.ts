@@ -6,7 +6,7 @@
  * `resetsAt` until then. It is a hint for the UI only: enforcement stays in the persistent quota
  * store and Google.
  */
-// import "server-only" is added once the Vitest alias for it exists (see the Gemini report).
+import "server-only";
 
 let exhaustedUntil: string | null = null;
 

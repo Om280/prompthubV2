@@ -5,7 +5,7 @@
  * client goes away or when the timeout passes, whichever comes first. No call exists yet; this is the
  * hook the AI integration phase plugs into.
  */
-// import "server-only" is added once the Vitest alias for it exists (see the Gemini report).
+import "server-only";
 
 export class AiTimeoutError extends Error {
   constructor(ms: number) {

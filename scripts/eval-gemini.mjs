@@ -199,7 +199,13 @@ async function main() {
       rows.push(row);
       console.log(`  ${row.kind.padEnd(9)} ${row.name.padEnd(13)} ${row.target.padEnd(8)} ${row.status}${row.note ? `  ${row.note}` : ""}`);
     };
-    const failure = (e) => (e instanceof BudgetExceeded ? "budget" : e?.code ? `${e.code}` : e?.name ?? "error");
+    const failure = (e) => {
+      if (e instanceof BudgetExceeded) return "budget";
+      const cause = e?.cause ?? e?.lastError ?? e;
+      const status = cause?.statusCode ?? e?.statusCode;
+      const kind = e?.name === "TimeoutError" || e?.code === 23 ? "timeout" : (e?.code ?? e?.name ?? "error");
+      return [kind, status ? `HTTP ${status}` : null].filter(Boolean).join(", ");
+    };
 
     const fixtures = mods.fixtures.FIXTURES;
     if (args.smoke) {
