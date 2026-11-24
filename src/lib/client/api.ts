@@ -20,7 +20,7 @@ export const ERROR_COPY = {
   promptTooLong: "This prompt is over 20,000 characters. Shorten it to keep editing.",
   invalid: "This request couldn't be sent as it is. Check the idea and try again.",
   aiRequired:
-    "Improve, Shorten, Expand and Tone need AI. AI with your own OpenRouter key is coming in a later update.",
+    "Improve, Shorten, Expand and Tone need AI, which is coming in a later update. Basic Mode still works, and your prompt is kept.",
   authRequired: "Sign in with Google to use AI features.",
   tooManyConcurrent: "You already have 2 requests running. Wait for one to finish.",
   internal: "Something went wrong on the server. Try again in a minute.",

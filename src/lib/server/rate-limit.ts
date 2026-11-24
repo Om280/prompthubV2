@@ -1,7 +1,8 @@
 import { readServerEnv } from "./env";
 
 /**
- * In-memory sliding-window rate limiters (ARCHITECTURE §5, "Auth and abuse prevention"). Server-only.
+ * In-memory sliding-window rate limiter for the public Basic Mode routes (ARCHITECTURE §7a). AI routes
+ * use the persistent quota store instead (`quota.ts`). Server-only.
  * Best-effort: each server instance (or serverless worker) keeps its own window, so limits are per
  * instance. A shared store (e.g. Upstash) can replace `createRateLimiter` at deploy time.
  */
@@ -58,15 +59,6 @@ export function createRateLimiter({ limit, windowMs, maxKeys = 10_000, now = Dat
  */
 export const ipRateLimiter = createRateLimiter({
   limit: () => readServerEnv().rateLimitPerMinute,
-  windowMs: 60_000,
-});
-
-/**
- * Per-user limiter, keyed by the verified user id (never a client-sent id):
- * RATE_LIMIT_PER_USER_PER_MINUTE requests per minute per user (default 20).
- */
-export const userRateLimiter = createRateLimiter({
-  limit: () => readServerEnv().rateLimitPerUserPerMinute,
   windowMs: 60_000,
 });
 

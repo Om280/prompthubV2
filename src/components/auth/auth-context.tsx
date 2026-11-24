@@ -5,7 +5,6 @@ import { toast } from "sonner";
 import type { AuthUser, SessionResponse } from "@/lib/contracts";
 import { authErrorMessage } from "@/lib/auth/safe-next";
 import { fetchSession, signInWithGoogle, signOut as postSignOut } from "@/lib/client/auth";
-import { aiKey } from "@/lib/client/ai-key";
 import { AUTH_NOT_CONFIGURED_REASON } from "@/lib/supabase/config";
 
 export type AuthState =
@@ -52,8 +51,7 @@ function currentPath(): string {
 
 /**
  * Auth state for the header and account page. Identity comes from GET /api/session (verified on the
- * server with `getClaims()`); the browser never decides who is signed in. Signing out, or a session
- * that turns out to be gone, clears the in-memory OpenRouter key.
+ * server with `getClaims()`); the browser never decides who is signed in.
  */
 export function AuthProvider({ children, onSignedOut }: { children: ReactNode; onSignedOut?: () => void }) {
   const [state, setState] = useState<AuthState>({ status: "loading" });
@@ -68,11 +66,7 @@ export function AuthProvider({ children, onSignedOut }: { children: ReactNode; o
     if (!s) setState({ status: "unknown" });
     else if (!s.configured) setState({ status: "unconfigured" });
     else if (s.user) setState({ status: "signed-in", user: s.user });
-    else {
-      // No verified session (signed out or expired): nothing AI-related may outlive it.
-      aiKey.clear();
-      setState({ status: "signed-out" });
-    }
+    else setState({ status: "signed-out" });
   }, []);
 
   const refresh = useCallback(

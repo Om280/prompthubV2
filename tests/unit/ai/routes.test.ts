@@ -190,7 +190,8 @@ describe("POST /api/transform", () => {
     expect(res.status).toBe(409);
     const { error } = await res.json();
     expect(error.code).toBe("ai_required");
-    expect(error.message).toContain("Improve, Shorten, Expand and Tone need AI.");
+    expect(error.message).toContain("Improve, Shorten, Expand and Tone need AI");
+    expect(error.message).toContain("Basic Mode still works");
     expect(error.message).not.toMatch(/API key to the server|_API_KEY/);
   });
 
@@ -204,15 +205,24 @@ describe("POST /api/transform", () => {
     expect((await res.json()).error.issues[0].path).toBe("tone");
   });
 
-  it("signed in: the per-user limit applies across IPs (default 20/min)", async () => {
+  it("signed in, AI not built: nothing is consumed, so repeated requests keep answering 409", async () => {
     configureAuth(true);
     auth.user = ADA;
-    for (let i = 0; i < 20; i++) expect((await transform(post("/api/transform", improve))).status).toBe(409);
-    const res = await transform(post("/api/transform", improve));
-    expect(res.status).toBe(429);
-    const { error } = await res.json();
-    expect(error.code).toBe("rate_limited");
-    expect(res.headers.get("retry-after")).toBe(String(error.retryAfterSec));
+    for (let i = 0; i < 25; i++) expect((await transform(post("/api/transform", improve))).status).toBe(409);
+  });
+
+  it("AI_ENABLED=false still answers 409 ai_required (no Gemini call), and Basic Mode keeps working", async () => {
+    configureAuth(true);
+    auth.user = ADA;
+    const prev = process.env.AI_ENABLED;
+    process.env.AI_ENABLED = "false";
+    try {
+      expect((await transform(post("/api/transform", improve))).status).toBe(409);
+      expect((await generate(post("/api/generate", validGenerate))).status).toBe(200);
+    } finally {
+      if (prev === undefined) delete process.env.AI_ENABLED;
+      else process.env.AI_ENABLED = prev;
+    }
   });
 });
 
@@ -233,17 +243,17 @@ describe("GET /api/providers (AiStatusResponse)", () => {
     }
   });
 
-  it("reports Basic Mode, AI unavailable, auth not configured", async () => {
+  it("reports Basic Mode, Gemini not configured, auth not configured", async () => {
     configureAuth(false);
     const res = await getProviders(new Request("http://localhost/api/providers"));
     const body = await res.json();
     expect(schemas.AiStatusResponse.safeParse(body).success).toBe(true);
     expect(body).toMatchObject({
       mode: "basic",
-      ai: { gateway: "openrouter", status: "unavailable" },
+      ai: { provider: "gemini", tier: "free", status: "not-configured" },
       auth: { configured: false, signedIn: false },
     });
-    expect(body.ai.message).toMatch(/coming in a later update/);
+    expect(body.ai.message).toMatch(/GEMINI_API_KEY isn't set/);
     expect(res.headers.get("cache-control")).toContain("no-store");
   });
 

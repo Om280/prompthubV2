@@ -5,8 +5,12 @@
 import { z } from "zod";
 
 export const TargetPlatform = z.enum(["chatgpt", "claude", "gemini"]);
-/** The only AI gateway. Each signed-in user brings their own OpenRouter key (never the owner's). */
-export const AiGateway = z.literal("openrouter");
+/**
+ * The only AI provider: Google Gemini, on the free tier only, with the app owner's single server-side
+ * key. No other provider, no paid tier, no fallback.
+ */
+export const AiProvider = z.literal("gemini");
+export const AiTier = z.literal("free");
 export const Length = z.enum(["concise", "balanced", "detailed"]);
 export const Tone = z.enum(["neutral", "friendly", "professional", "direct", "playful"]);
 export const TransformAction = z.enum(["improve", "shorten", "expand", "tone"]);
@@ -14,8 +18,9 @@ export const TransformAction = z.enum(["improve", "shorten", "expand", "tone"]);
 export const Engine = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("ai"),
-    gateway: AiGateway,
-    /** OpenRouter model id, e.g. "anthropic/claude-sonnet-5.5". */
+    provider: AiProvider,
+    tier: AiTier,
+    /** Gemini model id from the free-tier allowlist, e.g. "gemini-3.5-flash-lite". */
     model: z.string(),
   }),
   z.object({ kind: z.literal("basic") }),
@@ -34,11 +39,24 @@ export const Answer = z.object({
   answer: z.string().trim().min(1).max(1000),
 });
 
+/**
+ * Client-generated id of one AI request (UUID). A retry with the same id is never counted twice
+ * against any quota. Optional for Basic Mode; AI requests must send it.
+ */
+export const RequestId = z.uuid();
+/**
+ * Client-generated id of one prompt workflow (UUID): the clarify call and the generate call for the
+ * same idea share it, so they count as one workflow against the daily limit.
+ */
+export const WorkflowId = z.uuid();
+
 export const GenerationInput = z.object({
   idea: z.string().trim().min(1).max(4000),
   target: TargetPlatform,
   length: Length,
   answers: z.array(Answer).max(4),
+  requestId: RequestId.optional(),
+  workflowId: WorkflowId.optional(),
 });
 
 export const ClarifyRequest = GenerationInput.omit({ answers: true });
@@ -52,6 +70,7 @@ export const TransformRequest = z
     length: Length,
     tone: Tone.optional(),
     idea: z.string().max(4000).optional(),
+    requestId: RequestId.optional(),
   })
   .refine((r) => (r.action === "tone") === (r.tone !== undefined), {
     message: "tone is required when action is 'tone', and only then",
@@ -59,23 +78,29 @@ export const TransformRequest = z
   });
 
 /**
- * Why AI is or isn't available to this visitor. AI runs only through the user's own OpenRouter key:
- * - `unavailable`: this build has no AI generation yet;
- * - `sign-in-required`: AI exists but the visitor isn't signed in;
- * - `key-required`: signed in, but no OpenRouter key is connected for this session;
- * - `ready`: signed in with a key.
+ * Why AI is or isn't available to this visitor:
+ * - `unavailable`: this build has no AI generation yet (Phase 3);
+ * - `not-configured`: the server's Gemini key, model, or quota store is missing or invalid;
+ * - `sign-in-required`: AI is available but the visitor isn't signed in;
+ * - `ready`: signed in and AI can run;
+ * - `quota-exhausted`: the app-wide free-tier budget is used up until `resetsAt`.
  */
-export const AiStatus = z.enum(["unavailable", "sign-in-required", "key-required", "ready"]);
+export const AiStatus = z.enum(["unavailable", "not-configured", "sign-in-required", "ready", "quota-exhausted"]);
 
 /** GET /api/providers */
 export const AiStatusResponse = z.object({
   /** 'basic' unless `ai.status` is 'ready'. */
   mode: z.enum(["basic", "ai"]),
   ai: z.object({
-    gateway: AiGateway,
+    provider: AiProvider,
+    tier: AiTier,
+    /** The configured Gemini model id when it is on the free-tier allowlist, else null. Never the key. */
+    model: z.string().nullable(),
     status: AiStatus,
     /** User-facing explanation of `status`. */
     message: z.string(),
+    /** ISO time of the next quota reset (midnight America/Los_Angeles), when relevant. */
+    resetsAt: z.string().optional(),
   }),
   auth: z.object({
     /** Supabase Auth is configured on this server, so sign-in can work. */
@@ -110,6 +135,10 @@ export const ApiErrorCode = z.enum([
   "ai_required",
   "rate_limited",
   "too_many_concurrent",
+  "quota_exhausted",
+  "user_daily_limit",
+  "daily_budget_exhausted",
+  "duplicate_request",
   "provider_unavailable",
   "invalid_output",
   "internal",
@@ -119,6 +148,8 @@ export const ApiError = z.object({
   code: ApiErrorCode,
   message: z.string(),
   retryAfterSec: z.number().int().nonnegative().optional(),
+  /** ISO time when a quota or budget resets (quota_exhausted, daily limits). */
+  resetsAt: z.string().optional(),
   issues: z.array(z.object({ path: z.string(), message: z.string() })).optional(),
 });
 

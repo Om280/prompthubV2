@@ -48,7 +48,7 @@ describe("api client", () => {
   it("reads the AI status from /api/providers and validates it", async () => {
     const status = {
       mode: "basic",
-      ai: { gateway: "openrouter", status: "unavailable", message: "Coming later." },
+      ai: { provider: "gemini", tier: "free", model: "gemini-3.5-flash-lite", status: "unavailable", message: "Coming later." },
       auth: { configured: true, signedIn: false },
     };
     const { client, fetchMock } = clientWith(async () => jsonResponse(200, status));

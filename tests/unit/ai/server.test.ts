@@ -8,14 +8,26 @@ import { AppError } from "@/lib/ai/errors";
 describe("readServerEnv", () => {
   it("reads only the abuse limits; provider keys, orders and models are not part of the env", () => {
     const env = readServerEnv({ ANTHROPIC_API_KEY: "sk-ant-secret", PROVIDER_ORDER: "openai", OPENAI_MODEL: "x" });
-    expect(env).toEqual({ rateLimitPerMinute: 30, rateLimitPerUserPerMinute: 20 });
+    expect(env.rateLimitPerMinute).toBe(30);
     expect(JSON.stringify(env)).not.toContain("secret");
   });
 
-  it("reads RATE_LIMIT_PER_USER_PER_MINUTE with the same rules (default 20, clamp to 1)", () => {
-    expect(readServerEnv({ RATE_LIMIT_PER_USER_PER_MINUTE: "5" }).rateLimitPerUserPerMinute).toBe(5);
-    expect(readServerEnv({ RATE_LIMIT_PER_USER_PER_MINUTE: "abc" }).rateLimitPerUserPerMinute).toBe(20);
-    expect(readServerEnv({ RATE_LIMIT_PER_USER_PER_MINUTE: "0" }).rateLimitPerUserPerMinute).toBe(1);
+  it("reduces GEMINI_API_KEY and SUPABASE_SECRET_KEY to booleans, never values", () => {
+    const env = readServerEnv({ GEMINI_API_KEY: "AIzaSyFAKEVALUE", SUPABASE_SECRET_KEY: "sb_secret_FAKEVALUE", GEMINI_MODEL: " gemini-3.5-flash-lite " });
+    expect(env.geminiKeyPresent).toBe(true);
+    expect(env.supabaseSecretKeyPresent).toBe(true);
+    expect(env.geminiModel).toBe("gemini-3.5-flash-lite");
+    expect(JSON.stringify(env)).not.toContain("FAKEVALUE");
+    expect(readServerEnv({ GEMINI_API_KEY: "  " }).geminiKeyPresent).toBe(false);
+  });
+
+  it("project limits have no defaults (null until set); AI limits default and clamp to 1", () => {
+    expect(readServerEnv({}).project).toMatchObject({ rpm: null, tpm: null, rpd: null });
+    expect(readServerEnv({ GEMINI_PROJECT_RPM: "15", GEMINI_PROJECT_TPM: "0" }).project).toMatchObject({ rpm: 15, tpm: null });
+    expect(readServerEnv({ AI_USER_PER_MINUTE: "0" }).ai.userPerMinute).toBe(1);
+    expect(readServerEnv({ AI_USER_DAILY_WORKFLOWS: "abc" }).ai.userDailyWorkflows).toBe(5);
+    expect(readServerEnv({}).aiEnabled).toBe(true);
+    expect(readServerEnv({ AI_ENABLED: "false" }).aiEnabled).toBe(false);
   });
 });
 

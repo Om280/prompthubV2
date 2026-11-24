@@ -1,6 +1,6 @@
 /**
  * The one server error logger. Server-only. Everything it prints passes through `redact()`, so a
- * user's OpenRouter key or a bearer token that ends up in an error message is masked. It logs a short
+ * Gemini API key or a bearer token that ends up in an error message is masked. It logs a short
  * description (name and message), never request bodies, headers or stack traces with locals.
  */
 import { redact } from "./redact";

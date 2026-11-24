@@ -30,7 +30,7 @@ export interface MockOptions {
   today?: string;
 }
 
-const MOCK_ENGINE: Engine = { kind: "ai", gateway: "openrouter", model: "anthropic/claude-sonnet-5.5" };
+const MOCK_ENGINE: Engine = { kind: "ai", provider: "gemini", tier: "free", model: "gemini-3.5-flash-lite" };
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -133,16 +133,24 @@ export function createMockClient(options: MockOptions = {}): PromptHubClient {
         return {
           mode: "basic",
           ai: {
-            gateway: "openrouter",
+            provider: "gemini",
+            tier: "free",
+            model: null,
             status: "unavailable",
-            message: "AI generation with your own OpenRouter key is coming in a later update.",
+            message: "AI generation with Gemini is coming in a later update.",
           },
           auth: { configured: false, signedIn: false },
         };
       }
       return {
         mode: "ai",
-        ai: { gateway: "openrouter", status: "ready", message: "Sample AI status from the dev preview." },
+        ai: {
+          provider: "gemini",
+          tier: "free",
+          model: "gemini-3.5-flash-lite",
+          status: "ready",
+          message: "Sample AI status from the dev preview.",
+        },
         auth: { configured: true, signedIn: true },
       };
     },
@@ -190,5 +198,5 @@ export const PROVIDER_UNAVAILABLE_ERROR: ApiError = {
 
 export const AI_REQUIRED_ERROR: ApiError = {
   code: "ai_required",
-  message: "Improve, Shorten, Expand and Tone need AI. AI with your own OpenRouter key is coming in a later update.",
+  message: "Improve, Shorten, Expand and Tone need AI, which is coming in a later update. Basic Mode still works, and your prompt is kept.",
 };

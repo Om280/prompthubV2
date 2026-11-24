@@ -64,13 +64,9 @@ export function relativeLong(ts: number, now: number): string {
   return `${Math.floor(d / DAY)} days ago`;
 }
 
-/**
- * "Claude Sonnet 5.5 via OpenRouter" for an OpenRouter model id such as "anthropic/claude-sonnet-5.5"
- * (DESIGN §8). The model id is shown as given, minus the vendor prefix, so nothing is invented.
- */
+/** "Gemini 3.5 Flash Lite" for "gemini-3.5-flash-lite": the model id, capitalised, nothing invented. */
 export function modelLabel(model: string): string {
-  const name = model.includes("/") ? model.slice(model.indexOf("/") + 1) : model;
-  const words = name
+  const words = model
     .split(/[-_\s]+/)
     .filter(Boolean)
     .map((w) => (/^\d/.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1)));
@@ -81,7 +77,7 @@ export function engineLabel(engine: Engine | { kind: "manual" } | null | undefin
   if (!engine) return "";
   if (engine.kind === "basic") return "Basic Mode, no AI";
   if (engine.kind === "manual") return "you";
-  return `${modelLabel(engine.model)} via OpenRouter`;
+  return `${modelLabel(engine.model)} (free tier)`;
 }
 
 export function isMacPlatform(): boolean {

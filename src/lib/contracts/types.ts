@@ -2,7 +2,8 @@ import type { z } from "zod";
 import type * as S from "./schemas";
 
 export type TargetPlatform = z.infer<typeof S.TargetPlatform>;
-export type AiGateway = z.infer<typeof S.AiGateway>;
+export type AiProvider = z.infer<typeof S.AiProvider>;
+export type AiTier = z.infer<typeof S.AiTier>;
 export type Length = z.infer<typeof S.Length>;
 export type Tone = z.infer<typeof S.Tone>;
 export type TransformAction = z.infer<typeof S.TransformAction>;

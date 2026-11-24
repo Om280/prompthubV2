@@ -14,12 +14,13 @@ export const BASIC_MODE_EXPLANATION =
   "Prompts come from local templates that follow the platform and length you pick, so the same idea and settings always give the same prompt.";
 
 /**
- * How AI will work, honest about this build: there are no owner-funded keys. AI will use the user's
- * own OpenRouter key after they sign in with Google, kept in memory for the session only.
+ * How AI will work, honest about this build: Google Gemini on its free tier, for signed-in users,
+ * coming in a later update. The server's own status message explains a configuration problem.
  */
 export function aiPlanExplanation(status: AiStatusResponse | null): string {
   const base =
-    "AI will use your own OpenRouter key after you sign in with Google. The key stays in this tab's memory and is never saved. It's coming in a later update.";
+    "AI will use Google Gemini on its free tier after you sign in with Google. On the free tier, Google may use what you send to improve its products. It's coming in a later update.";
+  if (status?.ai.status === "not-configured") return `${base} ${status.ai.message}`;
   if (status && !status.auth.configured) return `${base} Sign-in isn't set up on this server yet.`;
   return base;
 }
@@ -48,7 +49,9 @@ export function EngineIndicator() {
             ? "Engine status unknown"
             : resultEngine
               ? engineLabel(resultEngine)
-              : "AI via OpenRouter";
+              : aiStatus?.ai.model
+                ? engineLabel({ kind: "ai", provider: "gemini", tier: "free", model: aiStatus.ai.model })
+                : "Gemini (free tier)";
 
   const dot = (
     <span

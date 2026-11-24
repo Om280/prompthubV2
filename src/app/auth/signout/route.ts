@@ -2,8 +2,7 @@
  * POST /auth/signout. POST only (other methods get 405 from Next), same-origin only (Origin, or
  * Sec-Fetch-Site when Origin is absent), so another site can't sign a user out. Clears the session
  * cookies via `signOut({ scope: "local" })` (this browser only) and redirects to "/" — or answers
- * JSON when the client asks for it (`Accept: application/json`). The browser also clears its
- * in-memory OpenRouter key on sign-out.
+ * JSON when the client asks for it (`Accept: application/json`).
  */
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import type { AuthUser } from "@/lib/contracts";
@@ -53,13 +54,19 @@ export function AccountDetails({ user }: { user: AuthUser }) {
       </section>
 
       <section className={SECTION}>
-        <h2 className={HEADING}>AI connection</h2>
+        <h2 className={HEADING}>AI features</h2>
         <p className={BODY}>
-          AI features will use your own OpenRouter key, so your usage is billed to your OpenRouter account, not to
-          PromptHub. The key is kept only in this tab&apos;s memory for your session. It is never saved to this
-          device or to our servers, and it is cleared when you sign out or close the tab.
+          AI features will use Google Gemini on its free tier, with daily and hourly limits per account. On the free
+          tier, Google may use the text you send to improve its products, so don&apos;t include personal or
+          sensitive information. Basic Mode never sends anything to Google.
         </p>
-        <p className={BODY}>This is coming in a later update. Until then, PromptHub runs in Basic Mode.</p>
+        <p className={BODY}>
+          AI is coming in a later update. Until then, PromptHub runs in Basic Mode.{" "}
+          <Link href="/privacy" className="text-accent hover:text-accent-hover">
+            Read the privacy notice
+          </Link>
+          .
+        </p>
       </section>
 
       <section className={SECTION}>

@@ -7,14 +7,12 @@
 import { schemas, type SessionResponse } from "@/lib/contracts";
 import { safeNextPath } from "@/lib/auth/safe-next";
 import { createClient } from "@/lib/supabase/client";
-import { aiKey, type AiKeyHolder } from "./ai-key";
 
 export const SIGN_IN_FAILED_MESSAGE = "Couldn't start Google sign-in. Check your connection and try again.";
 export const SIGN_OUT_FAILED_MESSAGE = "Couldn't sign out. Check your connection and try again.";
 
 export interface AuthDeps {
   fetch?: typeof fetch;
-  keyHolder?: AiKeyHolder;
 }
 
 /** GET /api/session. Throws on network or contract failure. */
@@ -50,13 +48,9 @@ export async function signInWithGoogle(next: string): Promise<string | null> {
   }
 }
 
-/**
- * POST /auth/signout, then clears the in-memory OpenRouter key. The key is cleared even when the
- * request fails, since the user asked to leave. Returns an error message, or null on success.
- */
+/** POST /auth/signout. Returns an error message, or null on success. */
 export async function signOut(deps: AuthDeps = {}): Promise<string | null> {
   const doFetch = deps.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
-  (deps.keyHolder ?? aiKey).clear();
   try {
     const res = await doFetch("/auth/signout", {
       method: "POST",

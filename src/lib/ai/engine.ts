@@ -2,7 +2,7 @@
  * Engine entry points used by the API routes (ARCHITECTURE §5). Server-only.
  *
  * This build has no AI generation: every call runs Basic Mode (local templates, labelled as such).
- * AI will run through the signed-in user's own OpenRouter key (never an owner-funded key); when it
+ * AI (Phase 3) will run only on Google Gemini's free tier with the owner's server-side key; when it
  * lands, a request that asks for AI and fails gets a mapped error, never Basic Mode output.
  */
 import type {
