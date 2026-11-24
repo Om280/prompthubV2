@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { schemas, type Answer, type GenerateRequest, type Length, type StreamEvent, type TargetPlatform } from "@/lib/contracts";
 import { buildBasicBrief } from "@/lib/ai/basic/brief";
 import { createEngine } from "@/lib/ai/engine";
-import { AppError } from "@/lib/ai/errors";
+import { AI_REQUIRED_MESSAGE, AppError } from "@/lib/ai/errors";
 import { PROFILES } from "@/lib/prompting";
 import { evaluatePrompt } from "@/lib/prompting/evaluate";
 
@@ -11,7 +11,7 @@ const LENGTHS: Length[] = ["concise", "balanced", "detailed"];
 const TODAY = "2026-11-23";
 
 const engine = () =>
-  createEngine({ registry: { providers: [], detected: [] }, today: () => TODAY, requestId: () => "req-test" });
+  createEngine({ today: () => TODAY, requestId: () => "req-test" });
 
 async function collect(it: AsyncIterable<StreamEvent>): Promise<StreamEvent[]> {
   const out: StreamEvent[] = [];
@@ -153,12 +153,11 @@ describe("engine.clarify and transform in Basic Mode", () => {
     expect(err).toBeInstanceOf(AppError);
     expect((err as AppError).code).toBe("ai_required");
     expect((err as AppError).status).toBe(409);
-    expect((err as AppError).message).toMatch(/^Improve, Shorten, Expand and Tone need an AI provider\. This build runs in Basic Mode\./);
+    expect((err as AppError).message).toBe(AI_REQUIRED_MESSAGE);
   });
 
-  it("transform mentions detected keys without claiming AI is available", async () => {
-    const e = createEngine({ registry: { providers: [], detected: ["anthropic"] } });
-    const err = (await e.transform({ action: "shorten", text: "x", target: "claude", length: "balanced" }).catch((x: unknown) => x)) as AppError;
-    expect(err.message).toContain("API keys were found, but AI providers aren't connected in this build yet.");
+  it("transform never tells the user to add a server API key", async () => {
+    const err = (await engine().transform({ action: "shorten", text: "x", target: "claude", length: "balanced" }).catch((x: unknown) => x)) as AppError;
+    expect(err.message).not.toMatch(/API_KEY|API key to the server/i);
   });
 });

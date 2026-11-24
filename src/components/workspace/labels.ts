@@ -86,6 +86,6 @@ export const SAME_PROMPT_NOTE =
   "Same idea and settings give the same prompt in Basic Mode. Change the platform, length or idea to get a different one.";
 
 export const BASIC_REASON =
-  "Improve, Shorten, Expand and Tone need an AI provider. Add an API key to the server to turn them on.";
+  "Improve, Shorten, Expand and Tone need AI, which is coming in a later update. Basic Mode still works, and your prompt is kept.";
 
 export { TARGET_LABELS };

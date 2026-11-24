@@ -1,18 +1,21 @@
 import { expect, test } from "@playwright/test";
 import { clickGenerate, editor, enterIdea, generateFromIdea, openApp } from "./helpers";
 
-test("11a. no API keys → Basic Mode is explained, never presented as AI", async ({ page, request }) => {
+test("11a. no AI in this build → Basic Mode is explained, never presented as AI", async ({ page, request }) => {
   const res = await request.get("/api/providers");
   expect(res.ok()).toBe(true);
   const body = await res.json();
-  expect(body).toMatchObject({ mode: "basic", providers: [], default: null });
+  // No Gemini settings in the e2e environment: AI reads "not configured" (never a fallback).
+  expect(body).toMatchObject({ mode: "basic", ai: { provider: "gemini", tier: "free", status: "not-configured" } });
+  // The message may name the missing setting, but never contains a key value.
+  expect(JSON.stringify(body)).not.toMatch(/AIza|sb_secret/);
 
   await openApp(page);
   await page.getByTestId("engine-indicator").click();
   await expect(page.getByText(/local templates/i).first()).toBeVisible();
 });
 
-test("11b. API contract: invalid input → 400 with issues; transform → 409 ai_required", async ({ request }) => {
+test("11b. API contract: invalid input → 400 with issues; transform signed out → 401 auth_required", async ({ request }) => {
   const bad = await request.post("/api/generate", { data: { idea: "", target: "chatgpt", length: "balanced", answers: [] } });
   expect(bad.status()).toBe(400);
   expect((await bad.json()).error).toMatchObject({ code: "invalid_request" });
@@ -23,8 +26,8 @@ test("11b. API contract: invalid input → 400 with issues; transform → 409 ai
   const t = await request.post("/api/transform", {
     data: { action: "improve", text: "Some prompt", target: "claude", length: "balanced" },
   });
-  expect(t.status()).toBe(409);
-  expect((await t.json()).error.code).toBe("ai_required");
+  expect(t.status()).toBe(401);
+  expect((await t.json()).error.code).toBe("auth_required");
 
   const gen = await request.post("/api/generate", {
     data: { idea: "Write a limerick about a cat", target: "gemini", length: "concise", answers: [] },

@@ -45,19 +45,27 @@ describe("api client", () => {
     expect(createApiClient({ fetch: vi.fn() as unknown as typeof fetch }).kind).toBe("api");
   });
 
-  it("reads providers and defaults a missing `detected` to []", async () => {
-    const { client, fetchMock } = clientWith(async () =>
-      jsonResponse(200, { mode: "basic", providers: [], default: null }),
-    );
-    await expect(client.getProviders()).resolves.toEqual({ mode: "basic", providers: [], default: null, detected: [] });
+  it("reads the AI status from /api/providers and validates it", async () => {
+    const status = {
+      mode: "basic",
+      ai: { provider: "gemini", tier: "free", model: "gemini-3.5-flash-lite", status: "unavailable", message: "Coming later." },
+      auth: { configured: true, signedIn: false },
+    };
+    const { client, fetchMock } = clientWith(async () => jsonResponse(200, status));
+    await expect(client.getAiStatus()).resolves.toEqual(status);
     expect(fetchMock.mock.calls[0][0]).toBe("/api/providers");
   });
 
-  it("keeps detected providers", async () => {
-    const { client } = clientWith(async () =>
-      jsonResponse(200, { mode: "basic", providers: [], default: null, detected: ["anthropic"] }),
-    );
-    expect((await client.getProviders()).detected).toEqual(["anthropic"]);
+  it("rejects an AI status that doesn't match the contract (e.g. the old provider list)", async () => {
+    const { client } = clientWith(async () => jsonResponse(200, { mode: "basic", providers: [], default: null }));
+    await expect(client.getAiStatus()).rejects.toBeInstanceOf(ClientError);
+  });
+
+  it("maps a bare 401 to auth_required", async () => {
+    expect(await clarifyError(new Response("", { status: 401 }))).toEqual({
+      code: "auth_required",
+      message: ERROR_COPY.authRequired,
+    });
   });
 
   it("posts clarify as JSON and validates the response", async () => {
