@@ -1,6 +1,6 @@
 # PromptHub — API Contracts
 
-Status: Phase 0, **frozen**; revised for auth (v1.2) and the Gemini free-tier AI plan with persistent quotas (v1.3), lead-authorised. Changes require
+Status: Phase 0, **frozen**; revised for auth (v1.2), the Gemini free-tier AI plan with persistent quotas (v1.3) and live Gemini generation (v1.4, additive), lead-authorised. Changes require
 lead sign-off and must be made in `src/lib/contracts/schemas.ts` and this file in the same change.
 
 All routes run on the Node.js runtime (the default; with `cacheComponents: true` Next 16 disallows a `runtime` export, so none is declared) and are same-origin. Request bodies are JSON (≤ 64 KB) and are validated
@@ -13,6 +13,8 @@ type TargetPlatform = 'chatgpt' | 'claude' | 'gemini';      // how the prompt is
 type Length         = 'concise' | 'balanced' | 'detailed';
 type Tone           = 'neutral' | 'friendly' | 'professional' | 'direct' | 'playful';
 type TransformAction = 'improve' | 'shorten' | 'expand' | 'tone';
+type TaskType = 'coding' | 'research' | 'creative' | 'brainstorm' | 'analysis' | 'planning' | 'productivity' | 'general'; // v1.4
+type EngineRequest = 'ai' | 'basic';  // v1.4: absent or 'basic' → Basic Mode; 'ai' → Gemini, never falls back to Basic
 // 'regenerate' is not a transform: it re-calls /api/generate with the original inputs.
 
 // AI is Google Gemini on its free tier only, with the app owner's server-side key. No other provider,
@@ -37,7 +39,11 @@ interface GenerationInput {
   answers: Answer[];          // 0–4
   requestId?: string;         // v1.3: client-generated UUID per request; REQUIRED for AI requests
   workflowId?: string;        // v1.3: client-generated UUID per idea; REQUIRED for AI clarify/generate
+  engine?: EngineRequest;     // v1.4
+  tone?: Tone;                // optional tone for generate
+  regenerate?: boolean;       // v1.4: generate as Regenerate; counts as a refinement, not a workflow
 }
+// ClarifyRequest = GenerationInput without `answers` and `regenerate`.
 // v1.2: `preferredProvider` was removed; unknown fields are stripped by validation.
 // requestId: a retry with the same id is never counted twice against any quota.
 // workflowId: the clarify and generate calls of one idea share it and count as ONE daily workflow.
@@ -57,14 +63,23 @@ interface AiStatusResponse {
     tier: 'free';
     model: string | null;          // GEMINI_MODEL when it is on the free-tier allowlist, else null
     status:
-      | 'unavailable'              // AI generation not built yet (this build), or AI_ENABLED=false
-      | 'not-configured'           // missing/invalid GEMINI_API_KEY, GEMINI_MODEL, quota store
-                                   //   (Supabase + SUPABASE_SECRET_KEY) or GEMINI_PROJECT_RPM/TPM/RPD
+      | 'unavailable'              // AI_ENABLED=false, or the quota store is unreachable / migration missing
+      | 'not-configured'           // missing/invalid GEMINI_API_KEY, GEMINI_MODEL or quota store config
+                                   //   (Supabase + SUPABASE_SECRET_KEY)
       | 'sign-in-required'         // AI ready, visitor signed out
       | 'ready'
       | 'quota-exhausted';         // app-wide daily ceiling reached
     message: string;               // user-facing; for not-configured it names what's missing
     resetsAt?: string;             // ISO; next midnight America/Los_Angeles (quota-exhausted)
+    limits?: {                     // v1.4: which app-wide ceilings apply
+      basis: 'project-ratio' | 'conservative-defaults' | 'mixed';
+      description: string;         // e.g. "Conservative defaults (project limits not supplied): 5 requests/min, …"
+    };
+  };
+  usage?: {                        // v1.4: signed-in users only; read through RLS (0002), never the secret key
+    workflows: { used: number; limit: number; remaining: number };
+    refinements: { used: number; limit: number; remaining: number };
+    resetsAt: string;              // next midnight America/Los_Angeles
   };
   auth: {
     configured: boolean;           // Supabase Auth is configured on this server
@@ -73,8 +88,9 @@ interface AiStatusResponse {
 }
 ```
 
-This build: `mode: 'basic'`; status `'unavailable'` ("AI generation with Gemini is coming in a later
-update.") when fully configured, else `'not-configured'`. `AI_ENABLED=false` → `'unavailable'` ("AI is
+`mode: 'ai'` and status `'ready'` when AI is configured, the quota store is healthy and the visitor is
+signed in; `'sign-in-required'` for signed-out visitors; otherwise `'not-configured'` or `'unavailable'`.
+Missing `GEMINI_PROJECT_*` limits do not block AI; conservative defaults apply (`limits.basis`). `AI_ENABLED=false` → `'unavailable'` ("AI is
 turned off on this server right now. Basic Mode still works.").
 
 ## 2a. `GET /api/session`
@@ -95,8 +111,16 @@ interface SessionResponse { configured: boolean; user: AuthUser | null }
   skipping anything the idea already answers); `engine: { kind: 'basic' }`.
 - `/api/generate`: the stream is `meta` (engine basic), **one** `delta` with the whole text, then
   `done`. The template is instant, so there is no artificial typing delay.
-- `/api/transform`: `401 auth_required` when signed out; `409 ai_required` for a signed-in user (improve, shorten, expand and tone). Regenerate goes through
-  `/api/generate` and is deterministic: the same idea, answers and settings give the same text.
+- `/api/transform`: `401 auth_required` when signed out; with AI unavailable, `409 ai_required` (improve, shorten, expand and tone).
+  Basic Regenerate goes through `/api/generate` and is deterministic: the same idea, answers and settings give the same text.
+
+### AI behaviour (v1.4, `engine: 'ai'`)
+
+- Requires a verified user (401 otherwise), a `requestId`, and a `workflowId` for clarify and generate.
+- `/api/clarify` returns Gemini's questions (0–4) and `taskType`, with `engine: { kind:'ai', provider:'gemini', tier:'free', model }`.
+- `/api/generate` streams `meta`, paragraph `delta`s of the rendered prompt, then `done`. The prompt is rendered from Gemini's brief with the selected target's profile.
+- `/api/transform` streams Gemini's rewrite. `done.truncated: true` means the output limit was reached, and the text is a partial version.
+- An AI request never returns Basic Mode output. Validation order for AI clarify/generate: body, then auth (signed out with an invalid body → 400).
 
 ## 3. `POST /api/clarify`
 
@@ -106,6 +130,7 @@ Request: `ClarifyRequest = Omit<GenerationInput, 'answers'>`
 // 200
 interface ClarifyResponse {
   questions: ClarifyingQuestion[];   // 0–4; [] means "specific enough, generate directly"
+  taskType?: TaskType;               // v1.4
   engine: Engine;
 }
 ```
@@ -123,7 +148,8 @@ type StreamEvent =
   | { type: 'meta';  engine: Engine; requestId: string }      // always first line
   | { type: 'delta'; text: string }                           // 0..n
   | { type: 'done';  text: string; title?: string;            // full final text; title on generate only
-      usage?: { inputTokens?: number; outputTokens?: number } }
+      usage?: { inputTokens?: number; outputTokens?: number };
+      truncated?: boolean }                                    // v1.4: output limit reached; keep as partial
   | { type: 'error'; error: ApiError };                       // terminal; replaces 'done'
 ```
 

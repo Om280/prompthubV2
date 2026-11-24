@@ -102,15 +102,17 @@ Common problems:
 ## 7. AI: a Gemini API key on the free tier only
 
 PromptHub's AI uses **only** Google Gemini's free tier, with one server-side key owned by you. It
-never uses a paid tier and never falls back to another model or provider. AI generation itself
-arrives in a later update. Until then `/api/providers` reports `unavailable` ("coming in a later
-update") when everything below is set, and `not-configured` (naming what's missing) otherwise.
+never uses a paid tier and never falls back to another model or provider. Only signed-in users can
+use AI. `/api/providers` reports `ready` when everything below is set, and `not-configured` (naming
+what's missing) or `unavailable` (for example, the quota migration is missing) otherwise.
 
 1. In **Google AI Studio** (https://aistudio.google.com), create an API key in a Google Cloud
    project that has **no billing account**. Keep it that way: never link billing to this project.
    With no billing account, the key can only use the free tier.
 2. Pick a model from the free-tier allowlist in `src/lib/ai/gemini-models.ts` (verified against
-   https://aistudio.google.com/docs/pricing on 2026-11-23). Recommended: `gemini-3.5-flash-lite`.
+   https://aistudio.google.com/docs/pricing on 2026-11-23 and re-checked 2026-11-24). Recommended:
+   `gemini-3.8-flash` (Stable, free input and output on the free tier, 1,048,576 tokens in and
+   65,536 out).
    Paid-only models (Gemini 4 Carbon/Argon/Neon, any `-pro`, image, Omni, Genie) are refused, and an
    unknown model is never silently replaced.
 3. Open https://aistudio.google.com/rate-limit and note that model's free-tier limits **for your
@@ -119,8 +121,12 @@ update") when everything below is set, and `not-configured` (naming what's missi
    - `GEMINI_API_KEY`: the key
    - `GEMINI_MODEL`: the model id
    - `GEMINI_PROJECT_RPM`, `GEMINI_PROJECT_TPM`, `GEMINI_PROJECT_RPD`: the numbers from step 3
-   - optionally `AI_GLOBAL_SAFETY_RATIO` (default `0.7`). PromptHub uses at most 70% of each limit
-     app-wide, leaving headroom so Google's own limit is never the one that trips.
+     (recommended). PromptHub then uses at most `AI_GLOBAL_SAFETY_RATIO` (default `0.7`) of each
+     limit app-wide, leaving headroom so Google's own limit is never the one that trips.
+   - If you leave them empty, conservative app-wide defaults apply instead: `AI_GLOBAL_RPM` 5,
+     `AI_GLOBAL_TPM` 100,000 and `AI_GLOBAL_RPD` 100. These are PromptHub's safeguards, not Google's
+     numbers, and `/api/providers` says which basis is in use.
+   - Optionally, `GEMINI_THINKING_LEVEL`: `low` (default), `medium` or `high`.
 5. Leave `AI_ENABLED=true`. Setting it to `false` stops every Gemini call at once (the emergency
    switch). Basic Mode keeps working.
 
@@ -140,7 +146,12 @@ never used for AI. Without this step AI stays `not-configured`.
 2. **Project Settings → API Keys → Secret keys**: create or copy a secret key (`sb_secret_…`). Set it
    as `SUPABASE_SECRET_KEY` in the **server** environment only (e.g. the host's runtime env vars).
    Never put it in a `NEXT_PUBLIC_` variable or in client code.
-3. Optional housekeeping: schedule `select public.ai_prune();` daily (Database → Cron, or pg_cron),
+3. Run `supabase/migrations/0002_usage_read.sql` the same way, **after** 0001. It lets a signed-in
+   user read only their own usage through RLS: a `select` policy on `ai_usage` (`user_id = auth.uid()`),
+   a `select` policy on `ai_rate_counters` limited to the caller's two daily buckets, and the
+   `security invoker` function `ai_my_usage_today()`. `/account` reads usage through the user's own
+   session (publishable key and the user's JWT), never through the secret key.
+4. Optional housekeeping: schedule `select public.ai_prune();` daily (Database → Cron, or pg_cron),
    which drops counters older than two days and expired in-flight leases.
 
 Verify the migration in the SQL editor (it leaves no data behind):
@@ -160,6 +171,16 @@ rollback;
 Expected: the first call returns `ok = true`, the second `ok = false` with
 `failed_bucket = test:verify:min` and `resets_at` at the next minute, and the third `ok = true,
 replay = true`. As an anonymous client, `select * from ai_usage` must return no rows (RLS).
+
+Verify 0002 in the SQL editor:
+
+```sql
+select policyname, roles, cmd from pg_policies
+ where tablename in ('ai_usage', 'ai_rate_counters');
+-- Expect ai_usage_select_own and ai_rate_counters_select_own, both {authenticated}, SELECT.
+select has_function_privilege('anon', 'public.ai_my_usage_today()', 'execute');          -- false
+select has_function_privilege('authenticated', 'public.ai_my_usage_today()', 'execute'); -- true
+```
 
 The unit tests exercise the same semantics with an in-memory double (`createMemoryQuotaStore`) and a
 mocked RPC client. The SQL itself can only be checked against a real database, as above.

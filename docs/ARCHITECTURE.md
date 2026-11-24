@@ -1,6 +1,6 @@
 # PromptHub — Architecture
 
-Status: Phase 0 draft, revised for auth and the Gemini free-tier plan · Last updated: 2026-11-24
+Status: as built (release candidate) · Last updated: 2026-11-24
 
 ## 1. Stack (versions checked on npm 2026-11-23)
 
@@ -8,20 +8,21 @@ Status: Phase 0 draft, revised for auth and the Gemini free-tier plan · Last up
 | --- | --- | --- |
 | Framework | Next.js App Router, React | next 16.4.x, react 19.3.x |
 | Language | TypeScript, strict | 7.0.x |
-| Styling | Tailwind CSS v4 (CSS-first `@theme`) | 4.3.x |
+| Styling | Tailwind CSS v4 (CSS-first `@theme`) plus Design C component CSS (`src/app/interlock.css`, `ih-` prefix) | 4.3.x |
 | Components | shadcn/ui (copied into `src/components/ui`), Radix primitives | shadcn CLI 4.23.x |
 | Icons | lucide-react | 1.78.x |
 | Motion | motion (`motion/react`) | 14.14.x |
-| AI | Google Gemini API, free tier only (owner's server-side key); client library chosen in the AI phase | none installed yet |
+| AI | Google Gemini API, free tier only (owner's server-side key), via the AI SDK | ai 7.0.166, @ai-sdk/google 4.0.114 |
+| Server boundary | `server-only` on every module that reads secrets or calls Gemini | 0.0.1 |
 | Auth, quota store | Supabase (`@supabase/ssr`, `@supabase/supabase-js`) | 0.12.7, 2.119.0 |
 | Validation | Zod 4 | 4.6.x |
 | Storage | IndexedDB via `idb` | 8.0.x |
 | Tests | Vitest + Testing Library + `fake-indexeddb`; Playwright | vitest 5.1.x, @playwright/test 1.65.x |
 | Runtime | Node 24 (local), Node runtime for route handlers | |
 
-AI phase note: whichever client is chosen must be constructed explicitly with `GEMINI_API_KEY`
-(Google SDK defaults use other env names). Verify factory names and options against current docs before
-coding, and send no tools, grounding or sampling parameters (see §5).
+The Gemini model is built only in `lib/ai/gemini/provider.ts` with `createGoogle({ apiKey })` and an
+explicit key, so the SDK's `GOOGLE_GENERATIVE_AI_API_KEY` fallback and `@ai-sdk/gateway` string ids are
+never used.
 
 ## 2. System overview
 
@@ -39,7 +40,8 @@ Browser (client components)                           Server (Next route handler
                                                     │   ├─ gemini-*.ts  (allowlist, errors)     │
                                                     │   ├─ prompts/*    (meta-prompts per task) │
                                                     │   ├─ basic/*      (template Basic Mode)   │
-                                                    │   └─ (AI phase) gemini adapter, no fallback│
+                                                    │   └─ gemini/*     (provider, clarify,     │
+                                                    │                    generate, transform)   │
                                                     └──────────────────────────────────────────┘
 ```
 
@@ -104,7 +106,11 @@ under `docs/reviews/`.
 - **Streaming:** `lib/client/ndjson.ts` reads the response body line by line into typed events
   (`meta | delta | done | error`). The editor shows deltas live; the version is committed on `done`
   only. A stream that ends with an error keeps the previous text and shows the error inline.
-- **Editor:** a styled `<textarea>` with auto-height, not a rich-text editor. Prompts are plain text or
+- **Editor:** two views of the same text.
+  - **Blocks** (the default, `block-editor.tsx` + `blocks.ts`): the prompt is parsed losslessly into labelled sections, each one editable in place. The parser also runs on partial streams, so blocks drop in as their headings arrive.
+  - **Plain text** (`prompt-editor`): a styled `<textarea>` with auto-height, not a rich-text editor.
+
+  In more detail: Prompts are plain text or
   Markdown that gets pasted elsewhere, so what you see is exactly what you copy. A tint layer with
   identical metrics sits beneath the transparent textarea text and colors the prompt's structure: tags,
   Markdown markers and [slots] (DESIGN §6.5).
@@ -124,41 +130,56 @@ under `docs/reviews/`.
 
 ## 5. Server / AI architecture
 
-Revised for the product owner's AI plan (feature/auth, v1.3): **Google Gemini only, free tier only,
-with the owner's single server-side key.** No OpenAI, Anthropic or other provider, no paid Gemini
-model, no paid fallback, and no fallback to another model. The multi-provider registry,
-`PROVIDER_ORDER`, `OPENAI_*`/`ANTHROPIC_*` keys and per-provider `*_MODEL` vars are gone. AI generation
-itself is the next phase; this build ships the configuration, status, quota and error-mapping layers,
-with no Gemini calls and no AI SDK packages.
+**Google Gemini only, free tier only, with the owner's single server-side key.** There is no OpenAI,
+Anthropic or OpenRouter, no paid Gemini model or tool, no fallback model and no user keys. The
+*target platform* (ChatGPT, Claude or Gemini) decides how the prompt is written; the *generation
+provider* is always Gemini. The engine meta says `{kind:"ai", provider:"gemini", tier:"free", model}`.
 
-- `lib/server/env.ts` reads and validates server env with Zod. Secrets (`GEMINI_API_KEY`,
-  `SUPABASE_SECRET_KEY`) become booleans during parsing. The single module that needs a value reads it
-  from `process.env` at the point of use (`quota.ts` for the Supabase secret; the Gemini adapter, later,
-  for the key).
-- `lib/ai/gemini-models.ts`: `FREE_TIER_TEXT_MODELS` allowlist, each entry `verifiedOn: "2026-11-23"`,
-  source https://aistudio.google.com/docs/pricing (`gemini-3.8-flash`, `gemini-3.6-flash`,
-  `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-3-flash-preview`, `gemini-2.5-flash-lite`).
-  It also has an explicit deny-list of paid-only ids plus denied families (`-pro`, image, Omni, Genie,
-  TTS/live/audio). `GEMINI_MODEL` must be on the allowlist. Otherwise status is `not-configured` with a
-  message naming the problem, and no other model is substituted. No default model in code;
-  `docs/AUTH_SETUP.md` recommends `gemini-3.5-flash-lite`. Adapter notes: no tools or grounding (Google
-  Search is "Not available" on the free tier for the 3.x text models), and Gemini 3.6+ ignores
-  temperature/top_p/top_k.
-- `lib/ai/status.ts` `aiReadiness()` checks, in order: `AI_ENABLED` (the emergency switch; `false` →
-  `unavailable`), key present, model allowed, quota store configured (Supabase + `SUPABASE_SECRET_KEY`),
-  `GEMINI_PROJECT_RPM`/`TPM`/`RPD` set, generation built. `aiStatusResponse()` turns that and the
-  verified session into `GET /api/providers`.
-- `lib/ai/gemini-errors.ts` `mapGeminiError()`: Google `429 RESOURCE_EXHAUSTED` → `quota_exhausted`
-  (503) with `resetsAt` (next Pacific midnight for per-day quotas, else now + `RetryInfo.retryDelay`).
-  Everything else → `provider_unavailable`. **No retries, no fallback.** The provider message is logged
-  (redacted), never forwarded.
-- `lib/ai/cancellation.ts` `aiCallSignal(request.signal, AI_TIMEOUT_MS)`: the hook the Gemini call
-  will use, so it is cancelled on client abort or timeout (30 s default).
-- `lib/ai/disclosure.ts`: the exact first-use AI notice. On the free tier Google uses submitted content
-  to improve its products. Shown on `/privacy` now; the first-use dialog comes with AI.
-- **Meta-prompts** (later phase): one builder per task plus per-target style guides. The user's idea,
-  answers and text are passed as delimited data, never concatenated into instructions. Output is
-  validated with one repair retry; a failure is an error, never Basic Mode output.
+- **Config.** `lib/server/env.ts` (server-only) validates server env with Zod. Secrets become booleans
+  while parsing. Only the modules that need a value read it from `process.env`, at the point of use:
+  `lib/ai/gemini/provider.ts` for the Gemini key and `lib/server/quota.ts` for the Supabase secret.
+- **Model allowlist.** `lib/ai/gemini-models.ts` holds the free-tier allowlist (verified 2026-11-23 and
+  re-checked 2026-11-24 against https://aistudio.google.com/docs/pricing). It also has a deny-list of
+  paid-only ids and families. There is no default model in code; the recommended model is
+  `gemini-3.8-flash`, whose `models.get` call succeeded for the owner's key on 2026-11-24.
+- **Readiness.** `lib/ai/status.ts` checks, in order: `AI_ENABLED` (the emergency switch), the key, the
+  model allowlist, the quota store config, then a cached health probe of the quota functions (60 s
+  when healthy, 15 s after a failure; a missing migration reads `unavailable`). Missing project limits
+  no longer block AI (§5.1).
+- **Every Gemini call** (`lib/ai/gemini/call.ts`):
+  - `maxRetries: 0`;
+  - `abortSignal` set to the lease signal (client disconnect plus `AI_TIMEOUT_MS`), with the SDK
+    `timeout` also set;
+  - `maxOutputTokens` = `AI_MAX_OUTPUT_TOKENS` (4096, thinking included);
+  - `thinkingLevel` = `GEMINI_THINKING_LEVEL` (default `low`);
+  - no temperature, top_p, top_k, tools or grounding.
+- **Clarify** (`gemini/clarify.ts`): structured output (`Output.object`) of the task type and 0 to 4
+  questions that would materially change the prompt. For a Gemini target, an "example?" question is
+  moved forward when format or style matters.
+- **Generate** (`gemini/generate.ts`): Gemini returns a structured `PromptBrief` (the target-neutral
+  brief); code renders it with `PROFILES[target].render()` and scores it with `evaluatePrompt()`.
+  - Rendering in code keeps each target's structure exact (ChatGPT Markdown, Claude XML, Gemini
+    task-first), keeps pasted material verbatim, and needs only one call per prompt.
+  - Faithfulness checks: every item must trace back to the idea and answers, examples must be the
+    user's own, and no emphasis or markup words are allowed.
+  - A failed check gets at most one repair. Whatever still fails afterwards is dropped, and any lost
+    answer is restored in the user's own words.
+  - The rendered prompt streams as paragraph deltas.
+- **Transforms** (`gemini/transform.ts`): Improve, Shorten, Expand, Tone and Regenerate.
+  - Gemini rewrites the text following `PROFILES[target].guidance`, and the result is streamed.
+  - It is then checked for target syntax, kept requirements, verbatim material and the direction of
+    the length change. A failure gets one repair; otherwise the result is `invalid_output` and the
+    previous version stays.
+  - A `length` finish is reported as `done.truncated`, and the client keeps it as a partial version.
+- **Errors** (`lib/ai/gemini-errors.ts`):
+  - Google 429 `RESOURCE_EXHAUSTED` becomes `quota_exhausted` with `resetsAt`.
+  - 503 and other failures become `provider_unavailable`.
+  - Timeouts, safety blocks and invalid output each get their own message.
+  - **No retries, no fallback.** The provider message is logged with `redact()` and never forwarded.
+- **Disclosure.** `lib/ai/disclosure.ts` holds the first-use AI notice: on the free tier, Google uses
+  submitted content to improve its products. It appears on `/privacy` and in the first-use dialog.
+- **Data minimisation.** Gemini receives only the idea, answers, prompt text and settings. It never
+  receives the user's name, email or ids.
 
 ### 5.1 Quota design (persistent, atomic)
 
@@ -182,9 +203,19 @@ If it fails at runtime, the guard fails closed (`internal`, "couldn't check your
     the set.
 - Buckets and defaults (all env-configurable): see API_CONTRACTS §5 "AI limits". In short: 5
   workflows and 5 refinements per user per Pacific day, 3/min per user, 10/min per IP, 1 in flight per
-  user (TTL 120 s), 20,000 input characters, and app-wide RPM/TPM/RPD ceilings at
-  `AI_GLOBAL_SAFETY_RATIO` (0.7) × the project's verified limits from
-  https://aistudio.google.com/rate-limit. There are no hardcoded free-tier numbers.
+  user (TTL 120 s), 20,000 input characters, and app-wide RPM/TPM/RPD ceilings.
+- **App-wide ceilings.** When `GEMINI_PROJECT_RPM/TPM/RPD` are supplied, each ceiling is
+  `AI_GLOBAL_SAFETY_RATIO` (0.7) × the project's limit from https://aistudio.google.com/rate-limit.
+  When they are not, PromptHub's conservative defaults apply: `AI_GLOBAL_RPM` 5, `AI_GLOBAL_TPM`
+  100,000 and `AI_GLOBAL_RPD` 100. Explicit `AI_GLOBAL_*` values cap either basis. `/api/providers`
+  reports which basis is in use (`ai.limits.basis`). No Google limit is assumed.
+- A repair is a second upstream request inside one lease, so `reconcileCalls()` charges it to
+  `global:rpm` and `global:rpd`.
+- **User-level reads** (`supabase/migrations/0002_usage_read.sql`): `authenticated` users get `select`
+  on their own `ai_usage` rows (`user_id = auth.uid()`), on their own two daily counters, and the
+  `security invoker` function `ai_my_usage_today()`. `lib/server/usage.ts` reads them through the
+  cookie-session client (the publishable key and the user's JWT), never through the secret key. The
+  secret key is used only for the privileged quota functions.
 - `guardAiRoute` order: verified user → body validation → readiness → `requestId`/`workflowId` and
   input cap → in-flight lease → `ai_consume`. The lease carries `signal`, `reconcileTokens()`,
   `recordUsage()` and an idempotent `release()` (on completion, error, stream cancel and abort).
@@ -215,15 +246,15 @@ If it fails at runtime, the guard fails closed (`internal`, "couldn't check your
 ## 7. Security
 
 - No `NEXT_PUBLIC_` variables for secrets.
-- `server-only` guard for `lib/ai/**` and `lib/server/**` is **required before Phase 3** starts reading
-  key values. Next bundles the alias internally; adding it needs a type declaration and a Vitest alias.
-  Until then:
-  - these modules are imported only from route handlers and tests (checked in the Phase 2 audit);
-  - `env.ts` turns each key into a boolean while parsing, so no key value can be returned or logged.
+- `import "server-only"` is in every module under `lib/server/**` and `lib/ai/**` that reads secrets,
+  calls Gemini or enforces quotas, so importing one from a client component fails the build. Vitest
+  aliases `server-only` to its empty module (`vitest.config.mts`).
 - Zod validation at every route boundary; input size caps; JSON body limit 64 KB.
 - No provider or database error bodies are forwarded to the client verbatim; messages are mapped.
 - `GEMINI_API_KEY` and `SUPABASE_SECRET_KEY` are server-only; `redact()` masks them in logs.
-- CSP and security headers set in `next.config.ts` at Phase 6.
+- Security headers are set in `next.config.ts`: `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`,
+  CSP `frame-ancestors 'none'; base-uri 'self'; form-action 'self'` and `Permissions-Policy`. A full
+  script CSP is a later hardening step.
 
 ## 7a. Auth and abuse prevention
 
@@ -266,8 +297,12 @@ Added with Google sign-in (feature/auth). Setup: `docs/AUTH_SETUP.md`.
 
 ## 8. Design system
 
-**Superseded.** The approved system is `docs/DESIGN.md` ("Spruce and brass"). The plan below was the
-Phase 0 draft and was not approved. It is kept for the record only; do not implement it.
+**Production design: Direction C "Interlock"** (`docs/design/DIRECTION-C.md`).
+- Tokens for light and dark live in `src/app/globals.css`.
+- Component styles live in `src/app/interlock.css` (`ih-` prefix). The Turbopack rule compiles all `.css` as global, so CSS modules aren't used.
+- Fonts are Funnel Display and Schibsted Grotesk via `next/font`.
+- "Spruce and brass" (`docs/DESIGN.md`) and the Phase 0 draft below are retired and kept for the record only.
+- The explorations are archived at the git tag `design-explorations-v1`.
 
 ### 8.0 Prompt generation path (added with the target profiles)
 
