@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { connection } from "next/server";
 import { Suspense } from "react";
 import { AccountDetails } from "@/components/auth/account-details";
 import { getVerifiedUser } from "@/lib/server/auth";
@@ -39,6 +40,9 @@ export default function AccountPage() {
 }
 
 async function VerifiedAccount() {
+  // Request-time only: verifying the session reads cookies and the clock, so no prerender (build or
+  // runtime prefetch) may run past this point.
+  await connection();
   const user = await getVerifiedUser();
   if (!user) redirect("/?signin=required");
   return <AccountDetails user={user} />;

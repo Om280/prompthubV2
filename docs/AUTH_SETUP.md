@@ -1,8 +1,10 @@
-# PromptHub: setting up Google sign-in (Supabase Auth)
+# PromptHub: setting up Google sign-in, Gemini (free tier) and the AI quota store
 
 PromptHub signs users in with Google through Supabase Auth (PKCE flow, cookies, verified on the
 server). Without this setup the app still works: it runs in Basic Mode and the header's **Sign in**
 button is disabled with "Sign-in isn't set up on this server yet."
+
+AI (§7–8) is optional on top of sign-in and needs both. Without it AI stays off and Basic Mode works.
 
 You need: a Supabase account, a Google Cloud account, and the domain you'll deploy to. Nothing below
 invents credentials. Every ID, secret and URL comes from your own Supabase and Google projects.
@@ -63,8 +65,9 @@ Supabase dashboard → **Project Settings → API Keys** (and **Data API** for t
 - **Project URL** → `NEXT_PUBLIC_SUPABASE_URL` (e.g. `https://<project-ref>.supabase.co`)
 - **Publishable key** (`sb_publishable_…`) → `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
 
-Both are public by design: they ship to the browser. **Do not** use the secret (`sb_secret_…`) or
-legacy `service_role` key anywhere in PromptHub.
+Both are public by design: they ship to the browser. **Do not** put the secret (`sb_secret_…`) or
+legacy `service_role` key in these variables. The only secret key PromptHub uses is
+`SUPABASE_SECRET_KEY`, set server-side only, for the AI quota store (§8).
 
 - Local: put them in `.env.local` (copy `.env.example`), then restart `npm run dev`.
 - Hosting: add both to the host's environment **for the build step**. `NEXT_PUBLIC_` values are
@@ -95,6 +98,71 @@ Common problems:
 | Back on PromptHub with "Sign-in didn't finish" | The code expired or was used twice, or the PKCE cookie was lost (e.g. you started on `localhost` and returned on `127.0.0.1`). Use one origin and try again. |
 | Returned to the Site URL instead of PromptHub | Add `<origin>/auth/callback` to Supabase's Redirect URLs. |
 | "Access blocked: app not verified" | Add your account as a test user, or publish the consent screen. |
+
+## 7. AI: a Gemini API key on the free tier only
+
+PromptHub's AI uses **only** Google Gemini's free tier, with one server-side key owned by you. It
+never uses a paid tier and never falls back to another model or provider. AI generation itself
+arrives in a later update. Until then `/api/providers` reports `unavailable` ("coming in a later
+update") when everything below is set, and `not-configured` (naming what's missing) otherwise.
+
+1. In **Google AI Studio** (https://aistudio.google.com), create an API key in a Google Cloud
+   project that has **no billing account**. Keep it that way: never link billing to this project.
+   With no billing account, the key can only use the free tier.
+2. Pick a model from the free-tier allowlist in `src/lib/ai/gemini-models.ts` (verified against
+   https://aistudio.google.com/docs/pricing on 2026-11-23). Recommended: `gemini-3.5-flash-lite`.
+   Paid-only models (Gemini 4 Carbon/Argon/Neon, any `-pro`, image, Omni, Genie) are refused, and an
+   unknown model is never silently replaced.
+3. Open https://aistudio.google.com/rate-limit and note that model's free-tier limits **for your
+   project**: requests per minute (RPM), tokens per minute (TPM) and requests per day (RPD).
+4. Set, server-side only (never `NEXT_PUBLIC_`):
+   - `GEMINI_API_KEY`: the key
+   - `GEMINI_MODEL`: the model id
+   - `GEMINI_PROJECT_RPM`, `GEMINI_PROJECT_TPM`, `GEMINI_PROJECT_RPD`: the numbers from step 3
+   - optionally `AI_GLOBAL_SAFETY_RATIO` (default `0.7`). PromptHub uses at most 70% of each limit
+     app-wide, leaving headroom so Google's own limit is never the one that trips.
+5. Leave `AI_ENABLED=true`. Setting it to `false` stops every Gemini call at once (the emergency
+   switch). Basic Mode keeps working.
+
+On the free tier Google states that submitted content is used to improve its products. The public
+`/privacy` page and the first-use AI notice (`src/lib/ai/disclosure.ts`) tell users this.
+
+## 8. The AI quota store (Supabase migration and secret key)
+
+AI limits are enforced persistently and atomically in your Supabase database. In-memory limits are
+never used for AI. Without this step AI stays `not-configured`.
+
+1. Supabase dashboard → **SQL Editor** → new query → paste the whole of
+   `supabase/migrations/0001_ai_quota.sql` → **Run**. (With the Supabase CLI linked to the project,
+   `supabase db push` applies it instead.) It creates four tables (`ai_rate_counters`, `ai_consumed`,
+   `ai_inflight`, `ai_usage`) with RLS on and no policies, plus the `ai_*` functions. Only the service
+   role can execute them. No prompt text is stored anywhere.
+2. **Project Settings → API Keys → Secret keys**: create or copy a secret key (`sb_secret_…`). Set it
+   as `SUPABASE_SECRET_KEY` in the **server** environment only (e.g. the host's runtime env vars).
+   Never put it in a `NEXT_PUBLIC_` variable or in client code.
+3. Optional housekeeping: schedule `select public.ai_prune();` daily (Database → Cron, or pg_cron),
+   which drops counters older than two days and expired in-flight leases.
+
+Verify the migration in the SQL editor (it leaves no data behind):
+
+```sql
+begin;
+-- Two calls with different request keys against a limit of 1: the second is refused.
+select * from public.ai_consume(array['test:verify:min'], array['minute'], array[1], array[1], array['k1']);
+select * from public.ai_consume(array['test:verify:min'], array['minute'], array[1], array[1], array['k2']);
+-- A retry with the same key is a replay, not counted again.
+select * from public.ai_consume(array['test:verify:min'], array['minute'], array[1], array[1], array['k1']);
+-- Day windows start at midnight America/Los_Angeles.
+select public.ai_window_start('day', now()), public.ai_window_reset('day', now());
+rollback;
+```
+
+Expected: the first call returns `ok = true`, the second `ok = false` with
+`failed_bucket = test:verify:min` and `resets_at` at the next minute, and the third `ok = true,
+replay = true`. As an anonymous client, `select * from ai_usage` must return no rows (RLS).
+
+The unit tests exercise the same semantics with an in-memory double (`createMemoryQuotaStore`) and a
+mocked RPC client. The SQL itself can only be checked against a real database, as above.
 
 ## How it works (for maintainers)
 

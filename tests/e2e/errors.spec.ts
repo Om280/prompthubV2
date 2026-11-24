@@ -5,8 +5,10 @@ test("11a. no AI in this build → Basic Mode is explained, never presented as A
   const res = await request.get("/api/providers");
   expect(res.ok()).toBe(true);
   const body = await res.json();
-  expect(body).toMatchObject({ mode: "basic", ai: { status: "unavailable" } });
-  expect(JSON.stringify(body)).not.toMatch(/_API_KEY/);
+  // No Gemini settings in the e2e environment: AI reads "not configured" (never a fallback).
+  expect(body).toMatchObject({ mode: "basic", ai: { provider: "gemini", tier: "free", status: "not-configured" } });
+  // The message may name the missing setting, but never contains a key value.
+  expect(JSON.stringify(body)).not.toMatch(/AIza|sb_secret/);
 
   await openApp(page);
   await page.getByTestId("engine-indicator").click();

@@ -128,7 +128,8 @@ test("account page: signed-out visitors are sent home; signed-in users see profi
   const details = page.getByTestId("account-details");
   await expect(details).toContainText(USERS.ada.email);
   await expect(details).toContainText(/history stays on this device/i);
-  await expect(details.getByRole("heading", { name: "AI connection" })).toBeVisible();
+  await expect(details.getByRole("heading", { name: "AI features" })).toBeVisible();
+  await expect(details).toContainText(/Gemini on its free tier/);
   // No placeholder controls for a key.
   await expect(details.getByRole("textbox")).toHaveCount(0);
 

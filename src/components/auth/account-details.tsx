@@ -56,7 +56,7 @@ export function AccountDetails({ user }: { user: AuthUser }) {
       <section className={SECTION}>
         <h2 className={HEADING}>AI features</h2>
         <p className={BODY}>
-          AI features will use Google Gemini on its free tier, with daily and hourly limits per account. On the free
+          AI features will use Google Gemini on its free tier, with daily limits per account. On the free
           tier, Google may use the text you send to improve its products, so don&apos;t include personal or
           sensitive information. Basic Mode never sends anything to Google.
         </p>
