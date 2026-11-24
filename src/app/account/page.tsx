@@ -29,6 +29,11 @@ export default function AccountPage() {
           <VerifiedAccount />
         </Suspense>
       </main>
+      <footer className="column border-t border-border py-6">
+        <Link href="/privacy" className="type-meta text-fg-muted hover:text-fg">
+          Privacy
+        </Link>
+      </footer>
     </div>
   );
 }

@@ -243,3 +243,17 @@ test("forged tokens are rejected: a session cookie claiming another user reads a
     await expect(page.getByTestId("sign-in")).toBeVisible();
   }
 });
+
+test("privacy notice is public and linked from the account menu and /account", async ({ page, request }) => {
+  await page.goto("/privacy");
+  await expect(page.getByRole("heading", { name: "Privacy", level: 1 })).toBeVisible();
+  await expect(page.getByText(/free tier/).first()).toBeVisible();
+  await expect(page.getByText("Basic Mode sends nothing to Google")).toBeVisible();
+
+  await signIn(page, request, "ada");
+  await page.getByTestId("account-button").click();
+  await page.getByRole("menuitem", { name: "Privacy" }).click();
+  await expect(page).toHaveURL(/\/privacy$/);
+  await page.goto("/account");
+  await expect(page.getByRole("contentinfo").getByRole("link", { name: "Privacy" })).toBeVisible();
+});

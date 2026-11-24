@@ -85,6 +85,9 @@ export function AccountButton() {
             <MenuItem asChild>
               <Link href="/account">Account settings</Link>
             </MenuItem>
+            <MenuItem asChild>
+              <Link href="/privacy">Privacy</Link>
+            </MenuItem>
             <MenuItem disabled={signingOut} onSelect={() => void signOut()}>
               {signingOut ? "Signing out" : "Sign out"}
             </MenuItem>

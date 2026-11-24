@@ -135,7 +135,10 @@ function onAbort(request: Request, release: () => void): () => void {
 }
 
 function hashRequest(userId: string, operation: AiOperation, input: unknown): string {
-  const { requestId: _r, workflowId: _w, ...content } = (input ?? {}) as Record<string, unknown>;
+  // The ids differ between retries of the same content, so they are left out of the content hash.
+  const content = Object.fromEntries(
+    Object.entries((input ?? {}) as Record<string, unknown>).filter(([k]) => k !== "requestId" && k !== "workflowId"),
+  );
   return createHash("sha256").update(JSON.stringify([userId, operation, content])).digest("hex");
 }
 
