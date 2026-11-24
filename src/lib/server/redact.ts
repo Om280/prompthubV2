@@ -2,6 +2,7 @@
  * Masks secrets in strings before they are logged. Server-only, dependency-free (so the error mapper
  * can use it without import cycles).
  */
+import "server-only";
 
 /** Google API keys (the Gemini key format), wherever they appear in a string. */
 const GOOGLE_KEY_ANYWHERE = /AIza[0-9A-Za-z_-]{35}/g;

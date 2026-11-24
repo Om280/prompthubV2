@@ -7,9 +7,13 @@
  * The one module that needs a secret's value reads it from `process.env` itself, at the point of use
  * (`quota.ts` for `SUPABASE_SECRET_KEY`; the later Gemini adapter for `GEMINI_API_KEY`).
  *
- * There are no hardcoded free-tier numbers: the project's RPM/TPM/RPD come from the operator (copied
- * from https://aistudio.google.com/rate-limit). Until they are set, AI is `not-configured`.
+ * App-wide ceilings: when the operator supplies the project's verified RPM/TPM/RPD
+ * (`GEMINI_PROJECT_*`, copied from https://aistudio.google.com/rate-limit), the ceilings are
+ * `AI_GLOBAL_SAFETY_RATIO` (0.7) × those, capped by any explicit `AI_GLOBAL_*`. When they are not
+ * supplied, conservative configurable defaults apply (`AI_GLOBAL_RPM` 5, `AI_GLOBAL_TPM` 100,000,
+ * `AI_GLOBAL_RPD` 100). These are PromptHub's own safeguards, not Google's limits.
  */
+import "server-only";
 import { z } from "zod";
 
 export const DEFAULT_RATE_LIMIT_PER_MINUTE = 30;
@@ -24,10 +28,19 @@ export const AI_LIMIT_DEFAULTS = {
   maxConcurrentPerUser: 1,
   inflightTtlSeconds: 120,
   maxInputChars: 20_000,
-  maxOutputTokens: 2048,
+  // Thinking tokens count as output on Gemini 3.x, so Detailed prompts need room for both.
+  maxOutputTokens: 4096,
   timeoutMs: 30_000,
   globalSafetyRatio: 0.7,
 } as const;
+
+/** Conservative app-wide ceilings used when the project's own limits weren't supplied. */
+export const AI_GLOBAL_DEFAULTS = { rpm: 5, tpm: 100_000, rpd: 100 } as const;
+
+export const THINKING_LEVELS = ["low", "medium", "high"] as const;
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+/** Gemini 3.8 Flash supports low/medium/high ("minimal" errors there). */
+export const DEFAULT_THINKING_LEVEL: ThinkingLevel = "low";
 
 /** Whole number ≥ 1. Absent or invalid → `fallback`. 0 and negatives clamp to 1 (never disabled). */
 const positiveInt = (fallback: number) =>
@@ -71,6 +84,15 @@ const enabledFlag = z
   .optional()
   .transform((raw) => !/^(false|0|off|no)$/i.test(raw?.trim() ?? ""));
 
+/** One of low | medium | high (case-insensitive). Anything else, including "minimal" → "low". */
+const thinkingLevel = z
+  .string()
+  .optional()
+  .transform((raw): ThinkingLevel => {
+    const t = raw?.trim().toLowerCase() ?? "";
+    return (THINKING_LEVELS as readonly string[]).includes(t) ? (t as ThinkingLevel) : DEFAULT_THINKING_LEVEL;
+  });
+
 const present = z
   .string()
   .optional()
@@ -91,6 +113,10 @@ const EnvSchema = z.object({
   GEMINI_PROJECT_TPM: requiredPositiveInt,
   GEMINI_PROJECT_RPD: requiredPositiveInt,
   AI_GLOBAL_SAFETY_RATIO: ratio(AI_LIMIT_DEFAULTS.globalSafetyRatio),
+  AI_GLOBAL_RPM: requiredPositiveInt,
+  AI_GLOBAL_TPM: requiredPositiveInt,
+  AI_GLOBAL_RPD: requiredPositiveInt,
+  GEMINI_THINKING_LEVEL: thinkingLevel,
   AI_USER_DAILY_WORKFLOWS: positiveInt(AI_LIMIT_DEFAULTS.userDailyWorkflows),
   AI_USER_DAILY_REFINEMENTS: positiveInt(AI_LIMIT_DEFAULTS.userDailyRefinements),
   AI_USER_PER_MINUTE: positiveInt(AI_LIMIT_DEFAULTS.userPerMinute),
@@ -109,6 +135,13 @@ export interface ProjectQuota {
   rpd: number | null;
   /** App-wide ceilings are this fraction of the project limits (default 0.7). */
   safetyRatio: number;
+}
+
+/** Explicit app-wide ceilings (`AI_GLOBAL_RPM/TPM/RPD`), or null when not set. */
+export interface GlobalOverrides {
+  rpm: number | null;
+  tpm: number | null;
+  rpd: number | null;
 }
 
 export interface AiLimits {
@@ -136,6 +169,10 @@ export interface ServerEnv {
   /** `SUPABASE_SECRET_KEY` is set (needed for the persistent quota store). Boolean only. */
   supabaseSecretKeyPresent: boolean;
   project: ProjectQuota;
+  /** Explicit AI_GLOBAL_* values. Optional so hand-built test envs stay valid. */
+  global?: GlobalOverrides;
+  /** `GEMINI_THINKING_LEVEL`, validated (default "low"). */
+  thinkingLevel?: ThinkingLevel;
   ai: AiLimits;
 }
 
@@ -157,6 +194,8 @@ export function readServerEnv(source: Record<string, string | undefined> = proce
       rpd: e.GEMINI_PROJECT_RPD,
       safetyRatio: e.AI_GLOBAL_SAFETY_RATIO,
     },
+    global: { rpm: e.AI_GLOBAL_RPM, tpm: e.AI_GLOBAL_TPM, rpd: e.AI_GLOBAL_RPD },
+    thinkingLevel: e.GEMINI_THINKING_LEVEL,
     ai: {
       userDailyWorkflows: e.AI_USER_DAILY_WORKFLOWS,
       userDailyRefinements: e.AI_USER_DAILY_REFINEMENTS,
@@ -174,4 +213,47 @@ export function readServerEnv(source: Record<string, string | undefined> = proce
 /** The app-wide ceiling for one project limit: floor(limit × ratio), at least 1. */
 export function safetyCeiling(limit: number, ratio: number): number {
   return Math.max(1, Math.floor(limit * ratio));
+}
+
+export type LimitsBasis = "project-ratio" | "conservative-defaults" | "mixed";
+
+export interface GlobalCeilings {
+  rpm: number;
+  tpm: number;
+  rpd: number;
+  basis: LimitsBasis;
+}
+
+/**
+ * The app-wide ceilings in force. Per limit: the supplied project value × the safety ratio, capped
+ * by an explicit AI_GLOBAL_* value; without a project value, the explicit value or the conservative
+ * default.
+ */
+export function globalCeilings(env: ServerEnv): GlobalCeilings {
+  const g = env.global ?? { rpm: null, tpm: null, rpd: null };
+  const pick = (k: "rpm" | "tpm" | "rpd"): number => {
+    const project = env.project[k];
+    const explicit = g[k];
+    if (project !== null) {
+      const fromProject = safetyCeiling(project, env.project.safetyRatio);
+      return explicit !== null ? Math.min(fromProject, explicit) : fromProject;
+    }
+    return explicit ?? AI_GLOBAL_DEFAULTS[k];
+  };
+  const supplied = (["rpm", "tpm", "rpd"] as const).filter((k) => env.project[k] !== null).length;
+  return {
+    rpm: pick("rpm"),
+    tpm: pick("tpm"),
+    rpd: pick("rpd"),
+    basis: supplied === 3 ? "project-ratio" : supplied === 0 ? "conservative-defaults" : "mixed",
+  };
+}
+
+/** Human description of the ceilings, for the status response and docs. */
+export function describeCeilings(c: GlobalCeilings, ratio: number): string {
+  const nums = `${c.rpm} requests/min, ${c.tpm.toLocaleString("en-US")} tokens/min, ${c.rpd} requests/day app-wide`;
+  const pct = `${Math.round(ratio * 100)}%`;
+  if (c.basis === "project-ratio") return `${pct} of supplied project limits: ${nums}.`;
+  if (c.basis === "mixed") return `Partly ${pct} of supplied project limits, partly conservative defaults: ${nums}.`;
+  return `Conservative defaults (project limits not supplied): ${nums}.`;
 }

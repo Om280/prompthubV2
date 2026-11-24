@@ -15,6 +15,7 @@
  * bucket is charged an estimate), and `adjust` reconciles with the actual count afterwards.
  * No prompt text is ever stored: only counters, keys, hashes and usage metadata.
  */
+import "server-only";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { getSupabaseConfig } from "@/lib/supabase/config";
 import { windowReset, windowStart, type QuotaWindow } from "./quota-windows";
@@ -58,11 +59,29 @@ export interface QuotaStore {
   recordUsage(record: UsageRecord): Promise<void>;
 }
 
+/**
+ * Why the store failed: `migration-missing` when PostgREST can't find the functions/tables
+ * (HTTP 404, PGRST202 function not found, PGRST205 table not found, 42883/42P01 from Postgres);
+ * `not-configured` when Supabase or the secret key is missing; otherwise `unreachable`.
+ */
+export type QuotaFailure = "migration-missing" | "not-configured" | "unreachable";
+
 export class QuotaStoreError extends Error {
-  constructor(message: string) {
+  readonly reason: QuotaFailure;
+  constructor(message: string, reason: QuotaFailure = "unreachable") {
     super(message);
     this.name = "QuotaStoreError";
+    this.reason = reason;
   }
+}
+
+const MISSING_CODES = new Set(["PGRST202", "PGRST205", "42883", "42P01"]);
+
+/** Classifies a PostgREST error without ever reading or forwarding its message. */
+export function quotaFailureOf(error: unknown, status?: number): QuotaFailure {
+  const code = (error as { code?: unknown } | null)?.code;
+  if (status === 404 || (typeof code === "string" && MISSING_CODES.has(code))) return "migration-missing";
+  return "unreachable";
 }
 
 /* ---------------------------------------------------------------- Supabase */
@@ -91,9 +110,9 @@ export function createSupabaseQuotaStore(client?: RpcClient): QuotaStore {
   const rpcClient = client ?? serviceClient();
 
   async function call<T>(fn: string, args: Record<string, unknown>): Promise<T> {
-    const { data, error } = await rpcClient.rpc(fn, args);
+    const { data, error, status } = (await rpcClient.rpc(fn, args)) as { data: unknown; error: unknown; status?: number };
     // Never forward the database's message: it can name tables or values.
-    if (error) throw new QuotaStoreError(`quota function ${fn} failed`);
+    if (error) throw new QuotaStoreError(`quota function ${fn} failed`, quotaFailureOf(error, status));
     return data as T;
   }
 
@@ -154,7 +173,7 @@ export function createSupabaseQuotaStore(client?: RpcClient): QuotaStore {
 function serviceClient(): RpcClient {
   const config = getSupabaseConfig();
   const secret = process.env.SUPABASE_SECRET_KEY?.trim();
-  if (!config || !secret) throw new QuotaStoreError("quota store isn't configured");
+  if (!config || !secret) throw new QuotaStoreError("quota store isn't configured", "not-configured");
   return createClient(config.url, secret, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   });
@@ -164,9 +183,59 @@ let shared: QuotaStore | null = null;
 
 /** The production store (lazily created). Throws `QuotaStoreError` when not configured. */
 export function getQuotaStore(): QuotaStore {
-  if (!isQuotaStoreConfigured()) throw new QuotaStoreError("quota store isn't configured");
+  if (!isQuotaStoreConfigured()) throw new QuotaStoreError("quota store isn't configured", "not-configured");
   shared ??= createSupabaseQuotaStore();
   return shared;
+}
+
+/* ---------------------------------------------------------------- health */
+
+export type QuotaHealth = "ok" | QuotaFailure;
+
+/** A no-op call that proves the migration's functions exist and the store answers. */
+const HEALTH_PROBE_ID = "00000000-0000-0000-0000-000000000000";
+
+/**
+ * Probes the quota store with a harmless call (`ai_release_inflight` on the nil UUID, which deletes
+ * nothing). Uses the secret key: this is a privileged server-side check, never user data.
+ */
+export async function probeQuotaStore(client?: RpcClient): Promise<QuotaHealth> {
+  try {
+    const c = client ?? serviceClient();
+    const { error, status } = (await c.rpc("ai_release_inflight", { p_request_id: HEALTH_PROBE_ID })) as {
+      error: unknown;
+      status?: number;
+    };
+    return error ? quotaFailureOf(error, status) : "ok";
+  } catch (err) {
+    return err instanceof QuotaStoreError ? err.reason : "unreachable";
+  }
+}
+
+const HEALTH_OK_TTL_MS = 60_000;
+const HEALTH_FAIL_TTL_MS = 15_000;
+let healthCache: { value: QuotaHealth; at: number } | null = null;
+
+/**
+ * Cached quota-store health (60 s when healthy, 15 s after a failure), so status requests don't
+ * hit the database each time. `invalidateQuotaHealth` forces the next call to probe again.
+ */
+export async function quotaHealth(probe: () => Promise<QuotaHealth> = () => probeQuotaStore(), now = Date.now()): Promise<QuotaHealth> {
+  if (healthCache) {
+    const ttl = healthCache.value === "ok" ? HEALTH_OK_TTL_MS : HEALTH_FAIL_TTL_MS;
+    if (now - healthCache.at < ttl) return healthCache.value;
+  }
+  const value = await probe();
+  healthCache = { value, at: now };
+  return value;
+}
+
+export function noteQuotaFailure(reason: QuotaFailure, now = Date.now()): void {
+  healthCache = { value: reason, at: now };
+}
+
+export function invalidateQuotaHealth(): void {
+  healthCache = null;
 }
 
 /* ---------------------------------------------------------------- memory (tests only) */

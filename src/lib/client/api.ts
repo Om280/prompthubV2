@@ -20,7 +20,8 @@ export const ERROR_COPY = {
   promptTooLong: "This prompt is over 20,000 characters. Shorten it to keep editing.",
   invalid: "This request couldn't be sent as it is. Check the idea and try again.",
   aiRequired:
-    "Improve, Shorten, Expand and Tone need AI, which is coming in a later update. Basic Mode still works, and your prompt is kept.",
+    "Improve, Shorten, Expand and Tone need AI, which isn't available right now. Basic Mode still works, and your prompt is kept.",
+  quotaExhausted: "The free AI quota is used up for now. Basic Mode still works, and your draft is kept.",
   authRequired: "Sign in with Google to use AI features.",
   tooManyConcurrent: "You already have 2 requests running. Wait for one to finish.",
   internal: "Something went wrong on the server. Try again in a minute.",
@@ -53,7 +54,8 @@ export function fallbackError(status: number, route: Route): ApiError {
   if (status === 401) return { code: "auth_required", message: ERROR_COPY.authRequired };
   if (status === 409) return { code: "ai_required", message: ERROR_COPY.aiRequired };
   if (status === 429) return { code: "rate_limited", message: ERROR_COPY.rateLimited };
-  if (status === 502 || status === 503 || status === 504) return { code: "provider_unavailable", message: ERROR_COPY.provider };
+  if (status === 503) return { code: "quota_exhausted", message: ERROR_COPY.quotaExhausted };
+  if (status === 502 || status === 504) return { code: "provider_unavailable", message: ERROR_COPY.provider };
   return { code: "internal", message: ERROR_COPY.internal };
 }
 
@@ -70,7 +72,7 @@ export async function errorFromResponse(res: Response, route: Route): Promise<Ap
   const error: ApiError = parsed.success && parsed.data.message.trim() ? parsed.data : base;
   // A 413 from a proxy or the body limit never has a useful message; keep ours.
   if (res.status === 413 && !parsed.success) return base;
-  if (error.code === "rate_limited" && error.retryAfterSec === undefined) {
+  if (error.retryAfterSec === undefined && (res.status === 429 || res.status === 503)) {
     const s = retryAfter(res);
     if (s !== undefined) return { ...error, retryAfterSec: s };
   }
@@ -88,6 +90,15 @@ const abortError = () => new DOMException("Aborted", "AbortError");
 export function createApiClient(options: ApiClientOptions = {}): PromptHubClient {
   const doFetch: typeof fetch = options.fetch ?? ((...args) => fetch(...args));
   const base = options.baseUrl ?? "";
+  /**
+   * Which engine clarify/generate ask for. "ai" only after the last status said `mode: "ai"`
+   * (signed in, AI ready) and the user hasn't chosen Basic Mode; Basic Mode otherwise.
+   */
+  let serverMode: "ai" | "basic" = "basic";
+  let preference: "auto" | "basic" = "auto";
+  const engineFor = (): "ai" | "basic" => (serverMode === "ai" && preference === "auto" ? "ai" : "basic");
+  /** Basic Mode requests keep the v1.3 wire shape (no engine field; absent means Basic Mode). */
+  const withEngine = <T extends object>(req: T): T => (engineFor() === "ai" ? { engine: "ai", ...req } : req);
 
   async function request(route: Route, init: RequestInit): Promise<Response> {
     try {
@@ -153,14 +164,27 @@ export function createApiClient(options: ApiClientOptions = {}): PromptHubClient
 
   return {
     kind: "api",
-    getAiStatus(): Promise<AiStatusResponse> {
-      return json("providers", { method: "GET", cache: "no-store" }, schemas.AiStatusResponse);
+    async getAiStatus(): Promise<AiStatusResponse> {
+      try {
+        const status = await json("providers", { method: "GET", cache: "no-store" }, schemas.AiStatusResponse);
+        serverMode = status.mode;
+        return status;
+      } catch (e) {
+        serverMode = "basic";
+        throw e;
+      }
+    },
+    setEnginePreference(p: "auto" | "basic") {
+      preference = p;
+    },
+    get engine() {
+      return engineFor();
     },
     clarify(req: ClarifyRequest, signal?: AbortSignal): Promise<ClarifyResponse> {
-      return json("clarify", post(req, signal), schemas.ClarifyResponse);
+      return json("clarify", post(withEngine(req), signal), schemas.ClarifyResponse);
     },
     generate(req: GenerateRequest, signal?: AbortSignal) {
-      return stream("generate", req, signal);
+      return stream("generate", withEngine(req), signal);
     },
     transform(req: TransformRequest, signal?: AbortSignal) {
       return stream("transform", req, signal);

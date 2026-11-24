@@ -14,7 +14,11 @@ const root = realpathSync.native(fileURLToPath(new URL(".", import.meta.url)));
 export default defineConfig({
   root,
   plugins: [react()],
-  resolve: { tsconfigPaths: true },
+  resolve: {
+    tsconfigPaths: true,
+    // `server-only` throws outside a React Server environment; tests import server modules directly.
+    alias: { "server-only": fileURLToPath(new URL("./node_modules/server-only/empty.js", import.meta.url)) },
+  },
   test: {
     include: ["tests/unit/**/*.test.{ts,tsx}"],
     environment: "node",

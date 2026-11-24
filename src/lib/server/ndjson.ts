@@ -59,6 +59,11 @@ export async function ndjsonResponse(
       }
       try {
         const r = await it.next();
+        // The client left while the source was working (e.g. a cancelled Gemini call): end quietly.
+        if (signal?.aborted) {
+          await close(controller);
+          return;
+        }
         if (r.done) {
           // Source ended without a terminal event: report it instead of leaving the client hanging.
           controller.enqueue(line({ type: "error", error: toApiError(new Error("stream ended without done")) }));

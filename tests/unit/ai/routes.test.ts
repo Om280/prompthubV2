@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("server-only", () => ({}));
 import { schemas, type StreamEvent } from "@/lib/contracts";
 import { GET as getProviders } from "@/app/api/providers/route";
 import { POST as clarify } from "@/app/api/clarify/route";
@@ -205,7 +206,7 @@ describe("POST /api/transform", () => {
     expect((await res.json()).error.issues[0].path).toBe("tone");
   });
 
-  it("signed in, AI not built: nothing is consumed, so repeated requests keep answering 409", async () => {
+  it("signed in, AI not configured: nothing is consumed, so repeated requests keep answering 409", async () => {
     configureAuth(true);
     auth.user = ADA;
     for (let i = 0; i < 25; i++) expect((await transform(post("/api/transform", improve))).status).toBe(409);

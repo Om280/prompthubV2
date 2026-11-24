@@ -2,6 +2,7 @@
  * Error mapping to the contract `ApiError` (API_CONTRACTS §5). Server-only.
  * Messages are user-facing and specific; they never include provider internals or env values.
  */
+import "server-only";
 import type { ApiError, ApiErrorCode } from "@/lib/contracts";
 import { logServerError } from "@/lib/server/log";
 
@@ -42,7 +43,9 @@ export const INTERNAL_MESSAGE =
   "Something went wrong on the server. Try again, and reload the page if it keeps happening.";
 
 export const AI_REQUIRED_MESSAGE =
-  "Improve, Shorten, Expand and Tone need AI, which is coming in a later update. Basic Mode still works, and your prompt is kept.";
+  "Improve, Shorten, Expand and Tone need AI, which isn't available on this server right now. Basic Mode still works, and your prompt is kept.";
+export const AI_PROMPT_REQUIRED_MESSAGE =
+  "AI prompt writing isn't available on this server right now. Basic Mode still works, and your draft is kept.";
 
 export const AUTH_REQUIRED_MESSAGE = "Sign in with Google to use AI features.";
 export const AUTH_NOT_CONFIGURED_MESSAGE =

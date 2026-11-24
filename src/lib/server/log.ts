@@ -3,6 +3,7 @@
  * Gemini API key or a bearer token that ends up in an error message is masked. It logs a short
  * description (name and message), never request bodies, headers or stack traces with locals.
  */
+import "server-only";
 import { redact } from "./redact";
 
 export function describeError(err: unknown): string {
