@@ -56,7 +56,13 @@ export interface SessionError {
   code?: ApiErrorCode;
   retry: "clarify" | Activity;
   tone?: Tone;
+  /** When a daily or quota limit resets (ISO), for quota_exhausted, user_daily_limit, daily_budget_exhausted. */
+  resetsAt?: string;
 }
+
+/** Shown when Gemini hit its output limit: the text is kept as a partial version. */
+export const TRUNCATED_MESSAGE =
+  "Gemini reached its output limit before finishing, so this version is incomplete. Try again, or choose a shorter length.";
 
 export interface SessionState {
   phase: Phase;
@@ -97,16 +103,17 @@ export type SessionAction =
   | { type: "streamStart"; activity: Activity; tone?: Tone; answers?: Answer[] }
   | { type: "streamMeta"; engine: Engine }
   | { type: "streamDelta"; text: string }
-  | { type: "streamDone"; text: string; title?: string; id: string; promptId: string; now: number }
+  | { type: "streamDone"; text: string; title?: string; id: string; promptId: string; now: number; truncated?: boolean }
   | {
       type: "streamError";
       message: string;
       code?: ApiErrorCode;
+      resetsAt?: string;
       /** The connection dropped: keep the text written so far as a partial version. */
       keepPartial?: { id: string; promptId: string; now: number };
     }
   | { type: "stopped"; id: string; promptId: string; now: number }
-  | { type: "failed"; message: string; code?: ApiErrorCode; retry: SessionError["retry"]; tone?: Tone }
+  | { type: "failed"; message: string; code?: ApiErrorCode; retry: SessionError["retry"]; tone?: Tone; resetsAt?: string }
   | { type: "edit"; text: string }
   | { type: "commitEdit"; id: string; now: number }
   | { type: "viewVersion"; index: number | null }
@@ -244,6 +251,7 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
       // Basic Mode is deterministic: the same inputs give the same text. Don't stack duplicates.
       const engine = state.stream.engine;
       if (
+        !action.truncated &&
         state.stream.activity === "regenerate" &&
         engine?.kind === "basic" &&
         state.versions.length > 0 &&
@@ -256,11 +264,22 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
         promptId: action.promptId,
         content: action.text,
         source: SOURCE_FOR[state.stream.activity],
+        ...(action.truncated ? { partial: true } : {}),
         tone: state.stream.activity === "tone" ? state.stream.tone : undefined,
         engine: state.stream.engine ?? { kind: "basic" },
         createdAt: action.now,
       };
-      return { ...appendVersion(state, v, action.promptId, action.title), phase: "ready", stream: null };
+      const next = appendVersion(state, v, action.promptId, action.title);
+      if (action.truncated) {
+        const s = state.stream;
+        return {
+          ...next,
+          phase: "error",
+          stream: null,
+          error: { message: TRUNCATED_MESSAGE, code: "invalid_output", retry: s.activity, tone: s.tone },
+        };
+      }
+      return { ...next, phase: "ready", stream: null };
     }
     case "stopped": {
       if (state.phase === "clarifying") return { ...state, phase: "idle", slow: false };
@@ -283,7 +302,13 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
     case "streamError": {
       if (!state.stream) return state;
       const s = state.stream;
-      const error: SessionError = { message: action.message, code: action.code, retry: s.activity, tone: s.tone };
+      const error: SessionError = {
+        message: action.message,
+        code: action.code,
+        retry: s.activity,
+        tone: s.tone,
+        ...(action.resetsAt ? { resetsAt: action.resetsAt } : {}),
+      };
       const keep = action.keepPartial;
       if (keep && s.text.trim()) {
         const v: VersionRecord = {
@@ -311,7 +336,13 @@ export function sessionReducer(state: SessionState, action: SessionAction): Sess
         phase: "error",
         slow: false,
         stream: null,
-        error: { message: action.message, code: action.code, retry: action.retry, tone: action.tone },
+        error: {
+          message: action.message,
+          code: action.code,
+          retry: action.retry,
+          tone: action.tone,
+          ...(action.resetsAt ? { resetsAt: action.resetsAt } : {}),
+        },
       };
 
     case "edit":
@@ -446,6 +477,15 @@ export function useSession(
   useEffect(() => {
     cb.current = callbacks;
   });
+  /** One workflowId per idea (clarify + generate count as one AI workflow). */
+  const workflowId = useRef<string | null>(null);
+  /** The last request's id, reused when the user retries that same request (never counted twice). */
+  const lastRequest = useRef<{ retry: SessionError["retry"]; requestId: string } | null>(null);
+  const requestIdFor = useCallback((kind: SessionError["retry"], reuse: boolean): string => {
+    const id = reuse && lastRequest.current?.retry === kind ? lastRequest.current.requestId : newId();
+    lastRequest.current = { retry: kind, requestId: id };
+    return id;
+  }, []);
 
   const persist = useCallback(
     (s: SessionState) => {
@@ -499,6 +539,7 @@ export function useSession(
               id: newId(),
               promptId: s.promptId ?? newId(),
               now: Date.now(),
+              truncated: ev.truncated === true,
             });
           } else if (ev.type === "error") {
             terminal = true;
@@ -508,6 +549,7 @@ export function useSession(
               type: "streamError",
               message: ev.error.message || GENERIC_ERROR,
               code: ev.error.code,
+              resetsAt: ev.error.resetsAt,
               keepPartial: dropped ? { id: newId(), promptId: s.promptId ?? newId(), now: Date.now() } : undefined,
             });
             if (ev.error.code === "ai_required") cb.current.onAiRequired?.();
@@ -524,7 +566,12 @@ export function useSession(
         }
       } catch (e) {
         if (signal.aborted || isAbortError(e)) return;
-        dispatch({ type: "streamError", message: errorMessage(e), code: e instanceof ClientError ? e.error.code : undefined });
+        dispatch({
+          type: "streamError",
+          message: errorMessage(e),
+          code: e instanceof ClientError ? e.error.code : undefined,
+          resetsAt: e instanceof ClientError ? e.error.resetsAt : undefined,
+        });
       } finally {
         if (controller.current?.signal === signal) controller.current = null;
       }
@@ -533,7 +580,7 @@ export function useSession(
   );
 
   const runStream = useCallback(
-    (activity: Activity, opts: { tone?: Tone; answers?: Answer[] } = {}) => {
+    (activity: Activity, opts: { tone?: Tone; answers?: Answer[]; retry?: boolean } = {}) => {
       abort();
       const ctrl = new AbortController();
       controller.current = ctrl;
@@ -541,10 +588,23 @@ export function useSession(
       const after = dispatch({ type: "streamStart", activity, tone: opts.tone, answers: opts.answers });
       if (after === before) return;
       cb.current.onStreamStart?.(activity, opts.tone);
+      const requestId = requestIdFor(activity, opts.retry === true);
       if (activity === "generate" || activity === "regenerate") {
         const g = after.generated!;
+        workflowId.current ??= newId();
         void consume(
-          client.generate({ idea: g.idea, target: g.target, length: g.length, answers: after.answers }, ctrl.signal),
+          client.generate(
+            {
+              idea: g.idea,
+              target: g.target,
+              length: g.length,
+              answers: after.answers,
+              requestId,
+              workflowId: workflowId.current,
+              ...(activity === "regenerate" ? { regenerate: true } : {}),
+            },
+            ctrl.signal,
+          ),
           ctrl.signal,
         );
       } else {
@@ -552,25 +612,33 @@ export function useSession(
         const g = after.generated ?? { idea: after.idea, target: after.target, length: after.length };
         void consume(
           client.transform(
-            { action: activity, text, target: g.target, length: g.length, tone: opts.tone, idea: g.idea },
+            { action: activity, text, target: g.target, length: g.length, tone: opts.tone, idea: g.idea, requestId },
             ctrl.signal,
           ),
           ctrl.signal,
         );
       }
     },
-    [abort, client, consume, dispatch],
+    [abort, client, consume, dispatch, requestIdFor],
   );
 
-  const clarify = useCallback(async () => {
+  const clarify = useCallback(async (opts: { retry?: boolean } = {}) => {
     abort();
     const s = dispatch({ type: "clarifyStart" });
     if (s.phase !== "clarifying") return;
+    // A new clarify starts a new workflow; a retry of the same clarify keeps its ids.
+    const reuse = opts.retry === true && lastRequest.current?.retry === "clarify" && workflowId.current !== null;
+    if (!reuse) workflowId.current = newId();
+    const wf = workflowId.current!;
+    const requestId = requestIdFor("clarify", reuse);
     const ctrl = new AbortController();
     controller.current = ctrl;
     slowTimer.current = setTimeout(() => dispatch({ type: "clarifySlow" }), 8000);
     try {
-      const res = await client.clarify({ idea: s.idea.trim(), target: s.target, length: s.length }, ctrl.signal);
+      const res = await client.clarify(
+        { idea: s.idea.trim(), target: s.target, length: s.length, requestId, workflowId: wf },
+        ctrl.signal,
+      );
       if (ctrl.signal.aborted) return;
       if (slowTimer.current) clearTimeout(slowTimer.current);
       if (res.questions.length === 0) {
@@ -590,10 +658,11 @@ export function useSession(
         type: "failed",
         message: errorMessage(e),
         code: e instanceof ClientError ? e.error.code : undefined,
+        resetsAt: e instanceof ClientError ? e.error.resetsAt : undefined,
         retry: "clarify",
       });
     }
-  }, [abort, client, dispatch, runStream]);
+  }, [abort, client, dispatch, requestIdFor, runStream]);
 
   /** Ctrl/Cmd+Enter and the Generate button: does the next sensible thing for the phase. */
   const primary = useCallback(() => {
@@ -621,10 +690,12 @@ export function useSession(
   const retry = useCallback(() => {
     const e = ref.current.error;
     if (!e) return;
-    if (e.retry === "clarify") void clarify();
+    // A manual retry of the same request reuses its requestId, so it is never counted twice.
+    if (e.retry === "clarify") void clarify({ retry: true });
     else if (e.retry === "generate" && ref.current.versions.length === 0)
-      runStream("generate", { answers: ref.current.answers });
-    else runStream(e.retry === "generate" ? "regenerate" : e.retry, { tone: e.tone });
+      runStream("generate", { answers: ref.current.answers, retry: true });
+    else if (e.retry === "generate") runStream("regenerate", { tone: e.tone });
+    else runStream(e.retry, { tone: e.tone, retry: true });
   }, [clarify, runStream]);
 
   const commitEdit = useCallback(() => dispatch({ type: "commitEdit", id: newId(), now: Date.now() }), [dispatch]);
@@ -643,8 +714,12 @@ export function useSession(
       restore: () => dispatch({ type: "restore", id: newId(), now: Date.now() }),
       reset: () => {
         abort();
+        workflowId.current = null;
+        lastRequest.current = null;
         dispatch({ type: "reset" });
       },
+      /** Use Basic Mode for clarify/generate from now on (e.g. after an AI limit), or "auto" to go back. */
+      setEnginePreference: (p: "auto" | "basic") => client.setEnginePreference?.(p),
       load: async (id: string) => {
         const [prompt, versions] = await Promise.all([history.get(id), history.getVersions(id)]);
         if (!prompt) return;
@@ -657,7 +732,7 @@ export function useSession(
       },
       getState: () => ref.current,
     }),
-    [abort, clarify, commitEdit, dispatch, history, primary, retry, runStream, stop],
+    [abort, clarify, client, commitEdit, dispatch, history, primary, retry, runStream, stop],
   );
 
   return { state, actions };

@@ -22,7 +22,8 @@
  *        user:<id>:workflows:day (5) | user:<id>:refinements:day (5) → 429 user_daily_limit
  *        global:rpm, global:tpm (token estimate)            → 429 rate_limited (app at capacity)
  *        global:rpd                                         → 503 daily_budget_exhausted
- *      Global ceilings are AI_GLOBAL_SAFETY_RATIO (0.7) × the project's verified RPM/TPM/RPD.
+ *      Global ceilings are AI_GLOBAL_SAFETY_RATIO (0.7) × the project's verified RPM/TPM/RPD when
+ *      supplied (capped by AI_GLOBAL_*), else the conservative AI_GLOBAL_RPM/TPM/RPD defaults.
  *      Day windows reset at midnight America/Los_Angeles.
  * After the call: `reconcileTokens(actual)` corrects the TPM estimate; `recordUsage(...)` writes
  * metadata (tokens, op, model, status, duration; never prompt text).
@@ -33,22 +34,32 @@
  * Identity only ever comes from `getVerifiedUser()`. Headers such as `x-user-id` and ids in the body
  * are ignored.
  */
+// import "server-only" is added once the Vitest alias for it exists (see the Gemini report).
 import { createHash, randomUUID } from "node:crypto";
 import { aiCallSignal } from "@/lib/ai/cancellation";
 import {
   AI_LIMIT_MESSAGES,
+  AI_PROMPT_REQUIRED_MESSAGE,
   AI_REQUIRED_MESSAGE,
   AppError,
   AUTH_NOT_CONFIGURED_MESSAGE,
   AUTH_REQUIRED_MESSAGE,
 } from "@/lib/ai/errors";
-import { aiReadiness, type AiReadiness } from "@/lib/ai/status";
+import { noteBudgetExhausted } from "@/lib/ai/budget-state";
+import { AI_MIGRATION_MISSING_MESSAGE, aiReadinessChecked, type AiReadiness } from "@/lib/ai/status";
 import { isAuthConfigured } from "@/lib/supabase/config";
 import { getVerifiedUser, type VerifiedUser } from "./auth";
 import { requestConcurrency, type ConcurrencyLimiter } from "./concurrency";
-import { MAX_CONCURRENT_REQUESTS, readServerEnv, safetyCeiling, type ServerEnv } from "./env";
+import {
+  DEFAULT_THINKING_LEVEL,
+  globalCeilings,
+  MAX_CONCURRENT_REQUESTS,
+  readServerEnv,
+  type ServerEnv,
+  type ThinkingLevel,
+} from "./env";
 import { logServerError } from "./log";
-import { getQuotaStore, type QuotaStore, type QuotaWindowSpec } from "./quota";
+import { getQuotaStore, noteQuotaFailure, QuotaStoreError, type QuotaStore, type QuotaWindowSpec } from "./quota";
 import { secondsUntil } from "./quota-windows";
 import { clientKey, ipRateLimiter, type RateLimiter } from "./rate-limit";
 
@@ -90,6 +101,10 @@ export interface AiRouteLease<T> extends RouteLease {
   /** Aborts on client disconnect or after AI_TIMEOUT_MS. Pass it to the Gemini call. */
   signal: AbortSignal;
   maxOutputTokens: number;
+  /** AI_TIMEOUT_MS, also passed to the SDK's own `timeout`. */
+  timeoutMs: number;
+  /** GEMINI_THINKING_LEVEL (validated). */
+  thinkingLevel: ThinkingLevel;
   /** Corrects the TPM charge with the actual token count. Never throws. */
   reconcileTokens(actualTotalTokens: number): Promise<void>;
   /** Writes usage metadata (no prompt text). Never throws. */
@@ -114,7 +129,7 @@ export interface AiGuardOptions<T> {
 export interface GuardDeps {
   getUser?: () => Promise<VerifiedUser | null>;
   authConfigured?: () => boolean;
-  readiness?: () => AiReadiness;
+  readiness?: () => AiReadiness | Promise<AiReadiness>;
   store?: () => QuotaStore;
   env?: () => ServerEnv;
   now?: () => Date;
@@ -167,8 +182,7 @@ export function aiWindows(
   estimatedTokens: number,
   env: ServerEnv,
 ): QuotaWindowSpec[] {
-  const { rpm, tpm, rpd, safetyRatio } = env.project;
-  if (rpm === null || tpm === null || rpd === null) throw new AppError("ai_required", AI_REQUIRED_MESSAGE);
+  const { rpm, tpm, rpd } = globalCeilings(env);
   const key = ids.requestId;
   const daily: QuotaWindowSpec = WORKFLOW_OPERATIONS.includes(operation)
     ? { bucket: `user:${user.id}:workflows:day`, window: "day", limit: env.ai.userDailyWorkflows, key: `wf:${ids.workflowId}` }
@@ -177,9 +191,9 @@ export function aiWindows(
     { bucket: `user:${user.id}:min`, window: "minute", limit: env.ai.userPerMinute, key },
     { bucket: `ip:${ip}:min`, window: "minute", limit: env.ai.ipPerMinute, key },
     daily,
-    { bucket: "global:rpm", window: "minute", limit: safetyCeiling(rpm, safetyRatio), key },
-    { bucket: "global:tpm", window: "minute", limit: safetyCeiling(tpm, safetyRatio), amount: estimatedTokens, key },
-    { bucket: "global:rpd", window: "day", limit: safetyCeiling(rpd, safetyRatio), key },
+    { bucket: "global:rpm", window: "minute", limit: rpm, key },
+    { bucket: "global:tpm", window: "minute", limit: tpm, amount: estimatedTokens, key },
+    { bucket: "global:rpd", window: "day", limit: rpd, key },
   ];
 }
 
@@ -205,11 +219,19 @@ export async function guardAiRoute<T>(
   const input = await options.readInput();
 
   // 3. Is AI available at all? (Never consume quota for a request that can't run.)
-  const readiness = (deps.readiness ?? (() => aiReadiness({ env })))();
-  if (readiness.status !== "ready") throw new AppError("ai_required", AI_REQUIRED_MESSAGE);
+  const operation = typeof options.operation === "function" ? options.operation(input) : options.operation;
+  const readiness = await (deps.readiness ?? (() => aiReadinessChecked({ env })))();
+  if (readiness.status !== "ready") {
+    const message =
+      readiness.message === AI_MIGRATION_MISSING_MESSAGE
+        ? AI_MIGRATION_MISSING_MESSAGE
+        : WORKFLOW_OPERATIONS.includes(operation) || operation === "regenerate"
+          ? AI_PROMPT_REQUIRED_MESSAGE
+          : AI_REQUIRED_MESSAGE;
+    throw new AppError("ai_required", message);
+  }
 
   // 3b. AI-only input rules: ids and total size.
-  const operation = typeof options.operation === "function" ? options.operation(input) : options.operation;
   const ids = options.ids(input);
   if (!isUuid(ids.requestId)) {
     throw new AppError("invalid_request", "AI requests need a requestId (a UUID). Reload the page and try again.", {
@@ -261,13 +283,20 @@ export async function guardAiRoute<T>(
     const result = await store.consume(
       aiWindows(user, ipOf(request), operation, { requestId, workflowId: ids.workflowId }, estimatedTokens, env),
     );
-    if (!result.ok) throw limitError(result.bucket, result.resetsAt, now());
+    if (!result.ok) {
+      if (result.bucket === "global:rpd") noteBudgetExhausted(result.resetsAt.toISOString());
+      throw limitError(result.bucket, result.resetsAt, now());
+    }
     replay = result.replay;
     reservedAt = result.reservedAt;
   } catch (err) {
     release();
     if (err instanceof AppError) throw err;
     logServerError("AI quota check failed", err);
+    if (err instanceof QuotaStoreError) {
+      noteQuotaFailure(err.reason);
+      if (err.reason === "migration-missing") throw new AppError("internal", AI_MIGRATION_MISSING_MESSAGE);
+    }
     throw new AppError("internal", QUOTA_CHECK_FAILED_MESSAGE);
   }
 
@@ -283,6 +312,8 @@ export async function guardAiRoute<T>(
     replay,
     signal: aiCallSignal(request.signal, env.ai.timeoutMs),
     maxOutputTokens: env.ai.maxOutputTokens,
+    timeoutMs: env.ai.timeoutMs,
+    thinkingLevel: env.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
     release: releaseOnce,
     async reconcileTokens(actual) {
       if (reconciled || replay || !Number.isFinite(actual)) return;

@@ -1,12 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
+vi.mock("server-only", () => ({}));
 import { schemas } from "@/lib/contracts";
 import { AI_LIMIT_MESSAGES, AppError } from "@/lib/ai/errors";
 import { mapGeminiError } from "@/lib/ai/gemini-errors";
 import { checkGeminiModel, FREE_TIER_TEXT_MODELS, GEMINI_PRICING_SOURCE, PAID_ONLY_MODELS } from "@/lib/ai/gemini-models";
 import { aiCallSignal, isTimeout } from "@/lib/ai/cancellation";
-import { aiReadiness, aiStatusResponse, AI_DISABLED_MESSAGE, AI_UNAVAILABLE_MESSAGE } from "@/lib/ai/status";
-import { readServerEnv } from "@/lib/server/env";
-import { createMemoryQuotaStore, createSupabaseQuotaStore, QuotaStoreError, type RpcClient } from "@/lib/server/quota";
+import {
+  aiReadiness,
+  aiReadinessChecked,
+  aiStatusResponse,
+  AI_DISABLED_MESSAGE,
+  AI_MIGRATION_MISSING_MESSAGE,
+  AI_QUOTA_UNREACHABLE_MESSAGE,
+  AI_UNAVAILABLE_MESSAGE,
+} from "@/lib/ai/status";
+import { AI_GLOBAL_DEFAULTS, describeCeilings, globalCeilings, readServerEnv } from "@/lib/server/env";
+import {
+  createMemoryQuotaStore,
+  createSupabaseQuotaStore,
+  invalidateQuotaHealth,
+  probeQuotaStore,
+  QuotaStoreError,
+  quotaFailureOf,
+  quotaHealth,
+  type RpcClient,
+} from "@/lib/server/quota";
 import { nextPacificMidnight, windowReset, windowStart } from "@/lib/server/quota-windows";
 import { redact } from "@/lib/server/redact";
 
@@ -164,6 +182,52 @@ describe("Supabase quota store (mocked RPC)", () => {
       .catch((e: unknown) => e);
     expect(err).toBeInstanceOf(QuotaStoreError);
     expect((err as Error).message).not.toContain("secret detail");
+    expect((err as QuotaStoreError).reason).toBe("unreachable");
+  });
+
+  it("a missing migration (404 / PGRST202 / PGRST205) is reported as migration-missing", async () => {
+    for (const [error, status] of [
+      [{ code: "PGRST202", message: "Could not find the function public.ai_consume" }, 404],
+      [{ code: "PGRST205", message: "Could not find the table" }, 404],
+      [{ message: "not found" }, 404],
+    ] as const) {
+      const rpc = vi.fn(async () => ({ data: null, error, status }));
+      const err = await createSupabaseQuotaStore({ rpc } as unknown as RpcClient)
+        .consume([{ bucket: "x", window: "day", limit: 1, key: "r" }])
+        .catch((e: unknown) => e);
+      expect((err as QuotaStoreError).reason).toBe("migration-missing");
+      expect(quotaFailureOf(error, status)).toBe("migration-missing");
+    }
+  });
+
+  it("health probe: a harmless no-op call, classified; cached for a minute when healthy", async () => {
+    const missing = vi.fn(async () => ({ data: null, error: { code: "PGRST202" }, status: 404 }));
+    expect(await probeQuotaStore({ rpc: missing } as unknown as RpcClient)).toBe("migration-missing");
+    expect(missing).toHaveBeenCalledWith("ai_release_inflight", { p_request_id: "00000000-0000-0000-0000-000000000000" });
+    const ok = vi.fn(async () => ({ data: null, error: null, status: 204 }));
+    expect(await probeQuotaStore({ rpc: ok } as unknown as RpcClient)).toBe("ok");
+    const thrown = vi.fn(async () => {
+      throw new TypeError("fetch failed");
+    });
+    expect(await probeQuotaStore({ rpc: thrown } as unknown as RpcClient)).toBe("unreachable");
+
+    invalidateQuotaHealth();
+    const probe = vi.fn(async () => "ok" as const);
+    const t0 = 1_000_000;
+    expect(await quotaHealth(probe, t0)).toBe("ok");
+    expect(await quotaHealth(probe, t0 + 59_000)).toBe("ok");
+    expect(probe).toHaveBeenCalledTimes(1);
+    await quotaHealth(probe, t0 + 61_000);
+    expect(probe).toHaveBeenCalledTimes(2);
+    // Failures are re-checked sooner (15 s).
+    invalidateQuotaHealth();
+    const bad = vi.fn(async () => "migration-missing" as const);
+    await quotaHealth(bad, t0);
+    await quotaHealth(bad, t0 + 10_000);
+    expect(bad).toHaveBeenCalledTimes(1);
+    await quotaHealth(bad, t0 + 16_000);
+    expect(bad).toHaveBeenCalledTimes(2);
+    invalidateQuotaHealth();
   });
 });
 
@@ -205,17 +269,79 @@ describe("AI readiness and status", () => {
     GEMINI_PROJECT_RPD: "1000",
   };
 
-  it("complete configuration in this build → unavailable (AI isn't built), model shown", () => {
+  it("complete configuration → ready (AI is built), model shown", () => {
     const r = aiReadiness({ env: readServerEnv(full), quotaConfigured: true });
-    expect(r).toEqual({ status: "unavailable", model: "gemini-3.5-flash-lite", message: AI_UNAVAILABLE_MESSAGE });
+    expect(r).toMatchObject({ status: "ready", model: "gemini-3.5-flash-lite" });
+    expect(aiReadiness({ env: readServerEnv(full), quotaConfigured: true, built: false })).toEqual({
+      status: "unavailable",
+      model: "gemini-3.5-flash-lite",
+      message: AI_UNAVAILABLE_MESSAGE,
+    });
+  });
+
+  it("missing GEMINI_PROJECT_* no longer blocks AI: conservative defaults apply, and status says so", () => {
+    const env = readServerEnv({ GEMINI_API_KEY: full.GEMINI_API_KEY, GEMINI_MODEL: "gemini-3.8-flash" });
+    expect(aiReadiness({ env, quotaConfigured: true }).status).toBe("ready");
+    const c = globalCeilings(env);
+    expect(c).toEqual({ ...AI_GLOBAL_DEFAULTS, basis: "conservative-defaults" });
+    expect(AI_GLOBAL_DEFAULTS).toEqual({ rpm: 5, tpm: 100_000, rpd: 100 });
+    const status = aiStatusResponse({ authConfigured: true, signedIn: true, env, readiness: aiReadiness({ env, quotaConfigured: true }) });
+    expect(status.ai.limits).toEqual({
+      basis: "conservative-defaults",
+      description: "Conservative defaults (project limits not supplied): 5 requests/min, 100,000 tokens/min, 100 requests/day app-wide.",
+    });
+    expect(schemas.AiStatusResponse.safeParse(status).success).toBe(true);
+  });
+
+  it("AI_GLOBAL_* are configurable; with project limits, 70% of them applies, capped by AI_GLOBAL_*", () => {
+    expect(globalCeilings(readServerEnv({ AI_GLOBAL_RPM: "2", AI_GLOBAL_TPM: "5000", AI_GLOBAL_RPD: "20" }))).toEqual({
+      rpm: 2,
+      tpm: 5000,
+      rpd: 20,
+      basis: "conservative-defaults",
+    });
+    const project = readServerEnv(full); // 15 / 250,000 / 1,000
+    expect(globalCeilings(project)).toEqual({ rpm: 10, tpm: 175_000, rpd: 700, basis: "project-ratio" });
+    expect(describeCeilings(globalCeilings(project), 0.7)).toMatch(/^70% of supplied project limits: 10 requests\/min/);
+    expect(globalCeilings(readServerEnv({ ...full, AI_GLOBAL_RPD: "50", AI_GLOBAL_RPM: "999" }))).toMatchObject({ rpm: 10, rpd: 50 });
+    expect(globalCeilings(readServerEnv({ GEMINI_PROJECT_RPM: "100" }))).toMatchObject({ rpm: 70, tpm: 100_000, basis: "mixed" });
+    // Invalid values fall back to the defaults, never to "unlimited".
+    expect(globalCeilings(readServerEnv({ AI_GLOBAL_RPM: "0", AI_GLOBAL_TPM: "lots" }))).toMatchObject({ rpm: 5, tpm: 100_000 });
+  });
+
+  it("AI_MAX_OUTPUT_TOKENS defaults to 4096 (thinking tokens count as output); GEMINI_THINKING_LEVEL is validated", () => {
+    expect(readServerEnv({}).ai.maxOutputTokens).toBe(4096);
+    expect(readServerEnv({}).thinkingLevel).toBe("low");
+    expect(readServerEnv({ GEMINI_THINKING_LEVEL: "HIGH" }).thinkingLevel).toBe("high");
+    expect(readServerEnv({ GEMINI_THINKING_LEVEL: "minimal" }).thinkingLevel).toBe("low");
+    expect(readServerEnv({ GEMINI_THINKING_LEVEL: "max" }).thinkingLevel).toBe("low");
+  });
+
+  it("quota store migration missing or unreachable → unavailable with a clear reason (fails closed)", async () => {
+    const env = readServerEnv(full);
+    expect(await aiReadinessChecked({ env, quotaConfigured: true, health: async () => "migration-missing" })).toMatchObject({
+      status: "unavailable",
+      message: AI_MIGRATION_MISSING_MESSAGE,
+    });
+    expect(AI_MIGRATION_MISSING_MESSAGE).toContain("AI usage limits aren't set up yet (database migration missing)");
+    expect(await aiReadinessChecked({ env, quotaConfigured: true, health: async () => "unreachable" })).toMatchObject({
+      status: "unavailable",
+      message: AI_QUOTA_UNREACHABLE_MESSAGE,
+    });
+    expect((await aiReadinessChecked({ env, quotaConfigured: true, health: async () => "ok" })).status).toBe("ready");
+  });
+
+  it("the health probe only runs when everything else is configured (no network call otherwise)", async () => {
+    const health = vi.fn(async () => "ok" as const);
+    await aiReadinessChecked({ env: readServerEnv({}), quotaConfigured: true, health });
+    await aiReadinessChecked({ env: readServerEnv(full), quotaConfigured: false, health });
+    expect(health).not.toHaveBeenCalled();
   });
 
   it.each([
     [{ ...full, GEMINI_API_KEY: "" }, /GEMINI_API_KEY isn't set/],
     [{ ...full, GEMINI_MODEL: "" }, /GEMINI_MODEL isn't set/],
     [{ ...full, GEMINI_MODEL: "gemini-4-argon" }, /isn't a free-tier text model/],
-    [{ ...full, GEMINI_PROJECT_RPD: "" }, /GEMINI_PROJECT_RPD isn't set/],
-    [{ ...full, GEMINI_PROJECT_RPM: "", GEMINI_PROJECT_TPM: "x" }, /GEMINI_PROJECT_RPM, GEMINI_PROJECT_TPM aren't set/],
   ])("missing piece → not-configured with a message naming it", (env, message) => {
     const r = aiReadiness({ env: readServerEnv(env), quotaConfigured: true });
     expect(r.status).toBe("not-configured");
@@ -243,7 +369,7 @@ describe("AI readiness and status", () => {
     const res = aiStatusResponse({
       authConfigured: true,
       signedIn: true,
-      readiness: aiReadiness({ env: readServerEnv(full), quotaConfigured: true }),
+      readiness: aiReadiness({ env: readServerEnv(full), quotaConfigured: true, built: false }),
     });
     expect(schemas.AiStatusResponse.safeParse(res).success).toBe(true);
     expect(JSON.stringify(res)).not.toContain("AIza");

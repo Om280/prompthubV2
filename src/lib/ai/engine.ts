@@ -1,9 +1,8 @@
 /**
- * Engine entry points used by the API routes (ARCHITECTURE §5). Server-only.
+ * Basic Mode engine used by the API routes (ARCHITECTURE §5, §6). Server-only.
  *
- * This build has no AI generation: every call runs Basic Mode (local templates, labelled as such).
- * AI (Phase 3) will run only on Google Gemini's free tier with the owner's server-side key; when it
- * lands, a request that asks for AI and fails gets a mapped error, never Basic Mode output.
+ * Local templates, labelled as such. AI runs in src/lib/ai/gemini/engine.ts, only when the client asks
+ * for it (engine "ai"); a request that asks for AI and fails gets a mapped error, never this output.
  */
 import type {
   ClarifyRequest,

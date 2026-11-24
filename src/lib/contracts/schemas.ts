@@ -14,6 +14,14 @@ export const AiTier = z.literal("free");
 export const Length = z.enum(["concise", "balanced", "detailed"]);
 export const Tone = z.enum(["neutral", "friendly", "professional", "direct", "playful"]);
 export const TransformAction = z.enum(["improve", "shorten", "expand", "tone"]);
+/** v1.4: task kind detected for an idea (same values as the prompting brief's `category`). */
+export const TaskType = z.enum(["coding", "research", "creative", "brainstorm", "analysis", "planning", "productivity", "general"]);
+/**
+ * v1.4: the engine the client asks for on clarify/generate. Absent or "basic" → Basic Mode (public).
+ * "ai" → Gemini free tier; it needs a verified session and AI ready, and it never falls back to
+ * Basic Mode (a failure is an error).
+ */
+export const EngineRequest = z.enum(["ai", "basic"]);
 
 export const Engine = z.discriminatedUnion("kind", [
   z.object({
@@ -57,9 +65,13 @@ export const GenerationInput = z.object({
   answers: z.array(Answer).max(4),
   requestId: RequestId.optional(),
   workflowId: WorkflowId.optional(),
+  /** v1.4, see `EngineRequest`. */
+  engine: EngineRequest.optional(),
+  /** v1.4: true when this generate call is a Regenerate (counted as a refinement, not a workflow). */
+  regenerate: z.boolean().optional(),
 });
 
-export const ClarifyRequest = GenerationInput.omit({ answers: true });
+export const ClarifyRequest = GenerationInput.omit({ answers: true, regenerate: true });
 export const GenerateRequest = GenerationInput;
 
 export const TransformRequest = z
@@ -87,6 +99,21 @@ export const TransformRequest = z
  */
 export const AiStatus = z.enum(["unavailable", "not-configured", "sign-in-required", "ready", "quota-exhausted"]);
 
+/**
+ * v1.4: where the app-wide request ceilings come from.
+ * - `project-ratio`: AI_GLOBAL_SAFETY_RATIO × the supplied GEMINI_PROJECT_RPM/TPM/RPD;
+ * - `conservative-defaults`: project limits not supplied, so AI_GLOBAL_RPM/TPM/RPD (defaults 5/100000/100);
+ * - `mixed`: some project limits supplied, the rest from the conservative defaults.
+ */
+export const AiLimitsBasis = z.enum(["project-ratio", "conservative-defaults", "mixed"]);
+
+/** v1.4: one daily allowance for the signed-in user. */
+export const UsageCount = z.object({
+  used: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  remaining: z.number().int().nonnegative(),
+});
+
 /** GET /api/providers */
 export const AiStatusResponse = z.object({
   /** 'basic' unless `ai.status` is 'ready'. */
@@ -101,7 +128,14 @@ export const AiStatusResponse = z.object({
     message: z.string(),
     /** ISO time of the next quota reset (midnight America/Los_Angeles), when relevant. */
     resetsAt: z.string().optional(),
+    /** v1.4: which app-wide ceilings apply. Present when AI is configured. */
+    limits: z.object({ basis: AiLimitsBasis, description: z.string() }).optional(),
   }),
+  /**
+   * v1.4: the signed-in user's AI allowance today, read through the user's own RLS-protected
+   * session (never the secret key). Absent when signed out, AI isn't ready, or it can't be read.
+   */
+  usage: z.object({ workflows: UsageCount, refinements: UsageCount, resetsAt: z.string() }).optional(),
   auth: z.object({
     /** Supabase Auth is configured on this server, so sign-in can work. */
     configured: z.boolean(),
@@ -127,6 +161,8 @@ export const SessionResponse = z.object({
 export const ClarifyResponse = z.object({
   questions: z.array(ClarifyingQuestion).max(4),
   engine: Engine,
+  /** v1.4: the detected task kind (AI clarify sets it; Basic Mode omits it). */
+  taskType: TaskType.optional(),
 });
 
 export const ApiErrorCode = z.enum([
@@ -163,6 +199,8 @@ export const StreamEvent = z.discriminatedUnion("type", [
     usage: z
       .object({ inputTokens: z.number().optional(), outputTokens: z.number().optional() })
       .optional(),
+    /** v1.4: true when Gemini hit its output-token limit, so `text` is incomplete (a partial result). */
+    truncated: z.boolean().optional(),
   }),
   z.object({ type: z.literal("error"), error: ApiError }),
 ]);
