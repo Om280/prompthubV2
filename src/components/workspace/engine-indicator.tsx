@@ -4,11 +4,29 @@ import { Check } from "lucide-react";
 import type { Engine, ProviderId } from "@/lib/contracts";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { engineLabel, cn, PROVIDER_LABELS } from "@/lib/utils";
+import { engineLabel, PROVIDER_LABELS } from "@/lib/utils";
 import { latest } from "@/hooks/use-session";
 import { useWorkspace } from "./workspace-context";
 
-type Kind = "preview" | "ai" | "basic" | "loading" | "failed";
+/**
+ * States the indicator can show. The last four are for the Gemini engine work that comes later;
+ * their dots are styled already (interlock.css), but nothing sets them until that data exists.
+ */
+export type EngineKind =
+  | "preview"
+  | "ai"
+  | "basic"
+  | "loading"
+  | "failed"
+  | "sign-in-required"
+  | "quota-exhausted"
+  | "not-configured"
+  | "unavailable";
+
+/** The status dot: hollow ring for Basic Mode, solid ink when AI is on, danger when it can't run. */
+export function EngineDot({ kind }: { kind: EngineKind }) {
+  return <span className="ih-engine-dot" data-engine={kind} aria-hidden />;
+}
 
 /** "Anthropic Claude Sonnet", "OpenAI GPT", "Google Gemini Flash". */
 function fullEngineName(provider: Extract<Engine, { kind: "ai" }>["provider"], model: string): string {
@@ -23,7 +41,7 @@ export function listProviders(ids: ProviderId[]): string {
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
-/** The Basic Mode explanation (DESIGN §6.3), honest about keys that exist but aren't usable yet. */
+/** The Basic Mode explanation, honest about keys that exist but aren't usable yet. */
 export function basicModeExplanation(detected: ProviderId[]): string {
   if (detected.length > 0) {
     return `API keys found for ${listProviders(detected)}. AI generation isn't connected in this build yet, so prompts come from local templates.`;
@@ -31,15 +49,22 @@ export function basicModeExplanation(detected: ProviderId[]): string {
   return "No AI provider is set up, so prompts come from local templates. Add ANTHROPIC_API_KEY, OPENAI_API_KEY or GEMINI_API_KEY to the server environment to turn on AI.";
 }
 
-const BODY = "mt-2 text-[14px] leading-[21px] text-fg-muted";
-
 /**
- * Header engine status (DESIGN §6.3). One button at every width: below 640px only the dot shows and
- * the label stays as its accessible name. "Preview data" appears only with the dev mock client.
+ * Engine status (DIRECTION-C §5). One instance on screen: in the top bar from 640px, and inline on
+ * phones (under the composer, or in the prompt sheet header). "Preview data" appears only with the
+ * dev mock client.
  */
-export function EngineIndicator() {
+export function EngineIndicator({ placement = "topbar" }: { placement?: "topbar" | "inline" } = {}) {
   const { providers, providersFailed, reloadProviders, preview, basic, state } = useWorkspace();
-  const kind: Kind = preview ? "preview" : providers ? (basic ? "basic" : "ai") : providersFailed ? "failed" : "loading";
+  const kind: EngineKind = preview
+    ? "preview"
+    : providers
+      ? basic
+        ? "basic"
+        : "ai"
+      : providersFailed
+        ? "failed"
+        : "loading";
 
   // After a fallback the label names the engine that wrote the current result.
   const lastEngine = latest(state)?.engine;
@@ -61,19 +86,6 @@ export function EngineIndicator() {
                 ? engineLabel({ kind: "ai", provider: first.id, model: first.model })
                 : "";
 
-  const dot = (
-    <span
-      aria-hidden
-      className={cn(
-        "size-1.5 shrink-0 rounded-full",
-        kind === "ai" && "bg-success",
-        kind === "basic" && "shadow-[inset_0_0_0_1px_var(--color-fg-subtle)]",
-        kind === "preview" && "bg-fg-subtle",
-        (kind === "loading" || kind === "failed") && "bg-border-control",
-      )}
-    />
-  );
-
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -81,30 +93,26 @@ export function EngineIndicator() {
           type="button"
           data-testid="engine-indicator"
           data-engine={kind}
-          className={cn(
-            "press flex h-8 items-center gap-2 rounded-sm px-2 type-meta text-fg-muted hover:bg-surface-2 hover:text-fg coarse:h-11",
-            "max-sm:w-11 max-sm:justify-center max-sm:px-0",
-          )}
+          data-placement={placement}
+          className="ih-engine"
         >
-          {dot}
-          <span className="whitespace-nowrap max-sm:sr-only">{label}</span>
+          <EngineDot kind={kind} />
+          <span>{label}</span>
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[320px]">
-        <p className="type-ui text-fg">{label}</p>
+      <PopoverContent align={placement === "topbar" ? "end" : "start"}>
+        <strong className="ih-popover-title">{label}</strong>
         {kind === "preview" && (
           <>
-            <p className={BODY}>This view uses sample data from the dev preview, not the server.</p>
-            <p className={BODY}>
-              Prompts here are rendered from local sample briefs, not written by AI. History lives in this tab only.
-            </p>
-            {basic && <p className={BODY}>Showing how Basic Mode looks when no AI provider is set up.</p>}
+            <p>This view uses sample data from the dev preview, not the server.</p>
+            <p>Prompts here are rendered from local sample briefs, not written by AI. History lives in this tab only.</p>
+            {basic && <p>Showing how Basic Mode looks when no AI provider is set up.</p>}
           </>
         )}
         {kind === "basic" && providers && (
           <>
-            <p className={BODY}>{basicModeExplanation(providers.detected)}</p>
-            <p className={BODY}>
+            <p>{basicModeExplanation(providers.detected)}</p>
+            <p>
               Templates follow the platform and length you pick, so the same idea and settings always give the same
               prompt. Improve, Shorten, Expand and Tone stay off until AI is on.
             </p>
@@ -112,7 +120,7 @@ export function EngineIndicator() {
         )}
         {kind === "ai" && first && providers && (
           <>
-            <p className={BODY}>
+            <p>
               Prompts are written by {fullEngineName(first.id, first.model)}
               {providers.providers.length > 1 &&
                 `. Falls back to ${providers.providers
@@ -121,24 +129,24 @@ export function EngineIndicator() {
                   .join(", then ")}`}
               .
             </p>
-            <ul className="mt-3 flex flex-col gap-1.5">
+            <ul>
               {providers.providers.map((p) => (
-                <li key={p.id} className="flex items-center gap-2 type-meta text-fg-muted">
-                  <Check className="size-3 text-success" aria-hidden />
-                  {p.label} <span className="text-fg-subtle">{p.model}</span>
+                <li key={p.id} className="flex items-center gap-2">
+                  <Check size={13} aria-hidden />
+                  {p.label} <span className="ih-hint">{p.model}</span>
                 </li>
               ))}
             </ul>
           </>
         )}
-        {kind === "loading" && <p className={BODY}>Checking which providers are set up.</p>}
+        {kind === "loading" && <p>Checking which providers are set up.</p>}
         {kind === "failed" && (
           <>
-            <p className={BODY}>
+            <p>
               PromptHub couldn&apos;t reach the server to check which engine is set up. Generate still works if the
               server is up.
             </p>
-            <Button variant="accent" className="-ml-1 mt-2" onClick={reloadProviders}>
+            <Button variant="secondary" size="sm" className="mt-3" onClick={reloadProviders}>
               Check again
             </Button>
           </>

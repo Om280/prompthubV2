@@ -113,6 +113,17 @@ export async function openIdbStore(options: IdbStoreOptions = {}): Promise<Histo
     async getVersions(promptId) {
       return db.getAllFromIndex("versions", "by-prompt", promptRange(promptId));
     },
+    async versionCounts() {
+      // Key-only cursor over [promptId, createdAt]: no version bodies are read.
+      const counts: Record<string, number> = {};
+      let cursor = await db.transaction("versions").store.index("by-prompt").openKeyCursor();
+      while (cursor) {
+        const id = cursor.key[0];
+        counts[id] = (counts[id] ?? 0) + 1;
+        cursor = await cursor.continue();
+      }
+      return counts;
+    },
     async putPrompt(record) {
       await db.put("prompts", record);
       changed();

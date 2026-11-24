@@ -4,36 +4,38 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { forwardRef, type ButtonHTMLAttributes, type MouseEvent } from "react";
 import { cn } from "@/lib/utils";
 
-export const buttonVariants = cva(
-  "press relative inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap type-ui select-none disabled:opacity-45 aria-disabled:opacity-45",
-  {
-    variants: {
-      variant: {
-        /** Accent fill. Exactly one per view (DESIGN §2). */
-        primary:
-          "h-9 rounded-sm bg-accent px-4 text-accent-on hover:bg-accent-hover coarse:min-h-11 disabled:hover:bg-accent",
-        ghost:
-          "h-8 rounded-sm px-2.5 text-fg-muted hover:bg-surface-2 hover:text-fg aria-disabled:hover:bg-transparent aria-disabled:hover:text-fg-muted coarse:min-h-11",
-        icon: "size-8 rounded-sm text-fg-muted hover:bg-surface-2 hover:text-fg coarse:size-11",
-        /** Plain text button. */
-        text: "h-7 rounded-xs px-1 text-fg-muted hover:text-fg coarse:min-h-11",
-        subtle: "h-7 rounded-xs px-1 text-fg-subtle hover:text-fg coarse:min-h-11",
-        accent: "h-7 rounded-xs px-1 text-accent hover:text-accent-hover coarse:min-h-11",
-        outline:
-          "h-9 rounded-sm px-4 text-fg shadow-[inset_0_0_0_1px_var(--color-border-control)] hover:bg-surface-2 coarse:min-h-11",
-      },
+/**
+ * Buttons (DIRECTION-C §11). Primary is cobalt and appears once per view (Generate or Copy).
+ * "Needs AI" is dashed and unfilled with a lock, so it never reads as a secondary action.
+ */
+export const buttonVariants = cva("ih-btn select-none", {
+  variants: {
+    variant: {
+      primary: "ih-btn-primary",
+      secondary: "ih-btn-secondary",
+      ghost: "ih-btn-ghost",
+      needsAi: "ih-btn-needs-ai",
+      danger: "ih-btn-ghost ih-btn-danger",
     },
-    defaultVariants: { variant: "ghost" },
+    size: {
+      md: "",
+      sm: "ih-btn-sm",
+      lg: "ih-btn-lg",
+    },
+    icon: { true: "ih-btn-icon", false: "" },
+    block: { true: "ih-btn-block", false: "" },
   },
-);
+  defaultVariants: { variant: "ghost", size: "md", icon: false, block: false },
+});
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof buttonVariants> {}
 
 /**
- * `aria-disabled` keeps the button focusable (so a tooltip can explain why) but swallows clicks.
+ * `aria-disabled` keeps the button focusable (so its reason can be read and shown) but swallows the
+ * click; `onDisabledClick` lets a Needs AI action explain itself instead.
  */
-export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
-  { className, variant, type = "button", onClick, ...props },
+export const Button = forwardRef<HTMLButtonElement, ButtonProps & { onDisabledClick?: () => void }>(function Button(
+  { className, variant, size, icon, block, type = "button", onClick, onDisabledClick, ...props },
   ref,
 ) {
   const ariaDisabled = props["aria-disabled"] === true || props["aria-disabled"] === "true";
@@ -41,10 +43,11 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
     <button
       ref={ref}
       type={type}
-      className={cn(buttonVariants({ variant }), className)}
+      className={cn(buttonVariants({ variant, size, icon, block }), className)}
       onClick={(e: MouseEvent<HTMLButtonElement>) => {
         if (ariaDisabled) {
           e.preventDefault();
+          onDisabledClick?.();
           return;
         }
         onClick?.(e);

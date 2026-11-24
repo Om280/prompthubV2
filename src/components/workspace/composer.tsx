@@ -1,31 +1,29 @@
 "use client";
 
-import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { CornerDownRight, RotateCcw } from "lucide-react";
+import { motion } from "motion/react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { useAutosize } from "@/hooks/use-autosize";
-import { cn, formatCount } from "@/lib/utils";
+import { useReducedMotion } from "@/hooks/use-media";
+import { formatCount } from "@/lib/utils";
+import { EngineIndicator } from "./engine-indicator";
+import { Settings } from "./settings-row";
 import { useWorkspace } from "./workspace-context";
 
 const CAP = 4000;
 const EASE = [0.23, 1, 0.32, 1] as const;
+export const IDEA_LABEL = "Describe what you want the AI to do";
 
-/** The page-load entrance (§7 #1) plays once per page view, not on every New prompt. */
+/** The page-load entrance plays once per page view, not on every New prompt. */
 let hasEntered = false;
-
-/** Fades the settings row in with the composer on first load. */
-export function EntranceFade({ children }: { children: ReactNode }) {
-  const [firstLoad] = useState(() => !hasEntered);
-  return (
-    <motion.div
-      initial={firstLoad ? { opacity: 0, y: 6 } : false}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.42, ease: EASE }}
-    >
-      {children}
-    </motion.div>
-  );
+export function useFirstEntrance(): boolean {
+  const [first] = useState(() => !hasEntered);
+  useEffect(() => {
+    hasEntered = true;
+  }, []);
+  return first;
 }
 
 export const EXAMPLES = [
@@ -34,110 +32,84 @@ export const EXAMPLES = [
   "Plan a 3-day trip to Lisbon on a budget",
 ];
 
-/**
- * The idea is the headline (DESIGN §1, §6.1): display type while empty, then a compact
- * editable title once a prompt exists.
- */
-export function Composer() {
-  const { state } = useWorkspace();
-  const display = state.phase === "idle";
-  return (
-    <AnimatePresence mode="wait" initial={false}>
-      {display ? (
-        <motion.div
-          key="display"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1, transition: { duration: 0.18, ease: EASE } }}
-          exit={{ opacity: 0, filter: "blur(2px)", transition: { duration: 0.12, ease: EASE } }}
-        >
-          <DisplayComposer />
-        </motion.div>
-      ) : (
-        <motion.div
-          key="title"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1, transition: { duration: 0.18, ease: EASE } }}
-          exit={{ opacity: 0, transition: { duration: 0.12, ease: EASE } }}
-        >
-          <TitleComposer />
-        </motion.div>
-      )}
-    </AnimatePresence>
-  );
+function ideaSize(n: number): "lg" | "md" | "sm" {
+  return n > 220 ? "sm" : n > 110 ? "md" : "lg";
 }
 
-function DisplayComposer() {
-  const { state, actions, composerRef, keys, generateRef } = useWorkspace();
-  const [firstLoad] = useState(() => !hasEntered);
-  useEffect(() => {
-    hasEntered = true;
-  }, []);
+/**
+ * Empty state (DIRECTION-C §13): the intake card with the cobalt "Your idea" piece, the two switches
+ * and "Try one". The first thing you touch is the first piece of the build.
+ */
+export function Composer() {
+  const { state, actions, composerRef, keys, generateRef, enginePlacement } = useWorkspace();
+  const first = useFirstEntrance();
+  const reduced = useReducedMotion();
   useAutosize(composerRef, state.idea);
   const n = state.idea.length;
-  const size = n > 180 ? "type-display-sm" : n > 90 ? "type-display-md" : "type-display";
   const canGenerate = state.idea.trim().length > 0;
   const atCap = n >= CAP;
 
   return (
-    <div>
-      <motion.div
-        initial={firstLoad ? { opacity: 0, y: 6 } : false}
+    <section className="ih-brief" aria-label="New prompt">
+      <motion.form
+        className="ih-intake"
+        initial={first ? (reduced ? { opacity: 0 } : { opacity: 0, y: 8 }) : false}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.42, ease: EASE }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          actions.primary();
+        }}
       >
-        <label htmlFor="composer" className="sr-only">
-          Describe what you want the AI to do
+        <label htmlFor="composer" className="ih-idea-piece">
+          Your idea<span className="ih-sr">: {IDEA_LABEL}</span>
         </label>
-        <div className="border-b border-border pb-4 transition-colors focus-within:border-border-control">
-          <textarea
-            id="composer"
-            ref={composerRef}
-            rows={1}
-            value={state.idea}
-            maxLength={CAP}
-            spellCheck
-            autoComplete="off"
-            placeholder="Describe what you want the AI to do"
-            onChange={(e) => actions.dispatch({ type: "setIdea", idea: e.target.value })}
-            className={cn("block w-full resize-none overflow-hidden bg-transparent text-fg-strong", size)}
-          />
-        </div>
-        <div className="mt-3 flex min-h-9 items-center gap-4">
-          <p className={cn("min-w-0 flex-1 type-meta", atCap ? "text-danger" : "text-fg-subtle")} aria-live="polite">
+        <textarea
+          id="composer"
+          ref={composerRef}
+          className="ih-idea-input"
+          data-size={ideaSize(n)}
+          rows={1}
+          value={state.idea}
+          maxLength={CAP}
+          spellCheck
+          autoComplete="off"
+          placeholder={IDEA_LABEL}
+          onChange={(e) => actions.dispatch({ type: "setIdea", idea: e.target.value })}
+        />
+        <div className="ih-intake-foot">
+          <span className={atCap ? "ih-helper ih-danger-text" : "ih-helper"} aria-live="polite">
             {atCap ? "Ideas can be up to 4,000 characters." : "Rough is fine. You can refine it after."}
-          </p>
+          </span>
           {n > 3500 && (
-            <span className={cn("shrink-0 type-meta tabular-nums", atCap ? "text-danger" : "text-fg-subtle")}>
+            <span className={atCap ? "ih-helper ih-counter ih-danger-text" : "ih-helper ih-counter"}>
               {formatCount(n)} / 4,000
             </span>
           )}
-          <Button
-            ref={generateRef}
-            variant="primary"
-            className="hidden sm:inline-flex"
-            disabled={!canGenerate}
-            onClick={() => actions.primary()}
-          >
+          <Button ref={generateRef} type="submit" variant="primary" disabled={!canGenerate}>
             Generate prompt
-            <Kbd keys={[keys.mod, keys.enter]} tone="on-accent" className="ml-1" />
+            <Kbd keys={[keys.mod, keys.enter]} tone={canGenerate ? "on-accent" : "default"} />
           </Button>
         </div>
-      </motion.div>
+      </motion.form>
+
+      {enginePlacement === "composer" && (
+        <div className="ih-under-intake">
+          <EngineIndicator placement="inline" />
+        </div>
+      )}
+
+      <Settings />
 
       {!state.idea && (
-        <motion.div
-          className="mt-12"
-          initial={firstLoad ? { opacity: 0, y: 6 } : { opacity: 0 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: firstLoad ? 0.42 : 0.18, ease: EASE, delay: firstLoad ? 0.08 : 0 }}
-        >
-          <h2 className="type-meta text-fg-subtle">Try one</h2>
-          <ul className="mt-2 flex flex-col items-start">
+        <div className="ih-field">
+          <h2 className="ih-label-sm">Try one</h2>
+          <ul className="ih-examples">
             {EXAMPLES.map((ex) => (
               <li key={ex}>
                 <button
                   type="button"
-                  className="press -mx-1 rounded-xs px-1 py-1.5 text-left text-[15px] leading-[22px] text-fg-muted hover:text-fg coarse:py-2.5"
+                  className="ih-example w-full"
                   onClick={() => {
                     actions.dispatch({ type: "setIdea", idea: ex });
                     requestAnimationFrame(() => {
@@ -148,59 +120,61 @@ function DisplayComposer() {
                     });
                   }}
                 >
+                  <CornerDownRight size={15} aria-hidden />
                   {ex}
                 </button>
               </li>
             ))}
           </ul>
-        </motion.div>
+        </div>
       )}
-    </div>
+    </section>
   );
 }
 
-function TitleComposer() {
+/**
+ * The idea after the first prompt: it stays the anchor (32px, compact 24px, phones 21px) and stays
+ * editable in place. Changing it offers "Regenerate from this idea".
+ */
+export function IdeaTitle() {
   const { state, actions, composerRef } = useWorkspace();
   useAutosize(composerRef, state.idea);
   const g = state.generated;
-  const changed = !!g && state.versions.length > 0 && state.idea.trim() !== g.idea && state.idea.trim().length > 0;
   const busy = state.phase === "generating" || state.phase === "transforming" || state.phase === "clarifying";
-  const wrap = useRef<HTMLDivElement>(null);
+  const changed = !!g && state.versions.length > 0 && state.idea.trim() !== g.idea && state.idea.trim().length > 0;
   const n = state.idea.length;
   const atCap = n >= CAP;
 
   return (
-    <div ref={wrap}>
-      <label htmlFor="composer" className="sr-only">
-        Describe what you want the AI to do
+    <>
+      <label htmlFor="composer" className="ih-sr">
+        {IDEA_LABEL}
       </label>
       <textarea
         id="composer"
         ref={composerRef}
+        className="ih-idea-title"
         rows={1}
         value={state.idea}
         maxLength={CAP}
         spellCheck
         onChange={(e) => actions.dispatch({ type: "setIdea", idea: e.target.value })}
-        className="field-title block w-full resize-none overflow-hidden bg-transparent pb-1 type-title text-fg-strong"
       />
       {(n > 3500 || (changed && !busy)) && (
-        <div className="mt-1 flex min-h-7 items-center gap-4">
+        <div className="ih-idea-meta">
           {changed && !busy && (
-            <Button variant="accent" className="-ml-1" onClick={actions.regenerate}>
+            <Button variant="secondary" size="sm" onClick={actions.regenerate}>
+              <RotateCcw size={14} aria-hidden />
               Regenerate from this idea
             </Button>
           )}
           {n > 3500 && (
-            <span
-              className={cn("ml-auto shrink-0 type-meta tabular-nums", atCap ? "text-danger" : "text-fg-subtle")}
-              aria-live="polite"
-            >
+            <span className={atCap ? "ih-helper ih-danger-text" : "ih-helper"} aria-live="polite">
               {atCap ? "Ideas can be up to 4,000 characters." : `${formatCount(n)} / 4,000`}
             </span>
           )}
         </div>
       )}
-    </div>
+    </>
   );
 }

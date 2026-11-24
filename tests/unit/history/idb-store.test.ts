@@ -88,6 +88,16 @@ describe("IndexedDB history store", () => {
     expect(versions[2]).toMatchObject({ restoredFrom: "v1", content: "content v1" });
   });
 
+  it("counts versions per prompt without reading their content", async () => {
+    const store = await openStore(freshName());
+    await store.commit(prompt("a"), version("a-v1", "a", NOW - 3000));
+    await store.commit(prompt("a"), version("a-v2", "a", NOW - 2000));
+    await store.commit(prompt("b"), version("b-v1", "b", NOW - 1000));
+    expect(await store.versionCounts()).toEqual({ a: 2, b: 1 });
+    await store.purge("a");
+    expect(await store.versionCounts()).toEqual({ b: 1 });
+  });
+
   it("lists newest first, soft-deletes, restores and deletes for good", async () => {
     const store = await openStore(freshName());
     await store.putPrompt(prompt("old", { updatedAt: NOW - 3 * DAY }));

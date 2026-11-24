@@ -45,6 +45,7 @@ export function createBrowserStore(
     list: via("list") as HistoryStore["list"],
     get: via("get") as HistoryStore["get"],
     getVersions: via("getVersions") as HistoryStore["getVersions"],
+    versionCounts: via("versionCounts") as HistoryStore["versionCounts"],
     putPrompt: via("putPrompt") as HistoryStore["putPrompt"],
     addVersion: via("addVersion") as HistoryStore["addVersion"],
     commit: via("commit") as HistoryStore["commit"],

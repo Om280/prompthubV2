@@ -50,6 +50,12 @@ export function createMemoryStore(seed: Seed | (() => Seed) = {}, opts: { persis
       ensure();
       return [...(versions.get(promptId) ?? [])].sort((a, b) => a.createdAt - b.createdAt);
     },
+    async versionCounts() {
+      ensure();
+      const counts: Record<string, number> = {};
+      for (const [id, list] of versions) if (list.length) counts[id] = list.length;
+      return counts;
+    },
     async putPrompt(record) {
       ensure();
       prompts.set(record.id, { ...record });

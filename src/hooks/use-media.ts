@@ -16,6 +16,9 @@ export function useMediaQuery(query: string, fallback = false): boolean {
   );
 }
 
+/** ≥1200: the brief keeps its own column beside the prompt sheet. */
+export const useIsWide = () => useMediaQuery("(min-width: 1200px)", true);
+/** ≥900: history docks as a panel; below it opens as a bottom sheet. */
 export const useIsDesktopRail = () => useMediaQuery("(min-width: 900px)", true);
 export const useIsMobile = () => useMediaQuery("(max-width: 639.98px)", false);
 export const useCoarsePointer = () => useMediaQuery("(pointer: coarse)", false);

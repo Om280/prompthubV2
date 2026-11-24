@@ -1,14 +1,21 @@
 import type { Metadata, Viewport } from "next";
-import { Mona_Sans } from "next/font/google";
+import { Funnel_Display, Schibsted_Grotesk } from "next/font/google";
 import type { ReactNode } from "react";
-import { THEME_INIT_SCRIPT } from "@/lib/client/theme";
+import { THEME_COLORS, THEME_INIT_SCRIPT } from "@/lib/client/theme";
 import "./globals.css";
 
-const mona = Mona_Sans({
+/** Display face: the idea, sheet titles, block labels, the wordmark. */
+const display = Funnel_Display({
   subsets: ["latin"],
-  axes: ["wdth"],
   display: "swap",
-  variable: "--font-mona",
+  variable: "--font-funnel",
+});
+
+/** Text face: prompt text, controls, meta. */
+const text = Schibsted_Grotesk({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-schibsted",
 });
 
 export const metadata: Metadata = {
@@ -21,13 +28,16 @@ export const viewport: Viewport = {
   initialScale: 1,
   viewportFit: "cover",
   interactiveWidget: "resizes-content",
-  themeColor: "#121816",
-  colorScheme: "dark light",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: THEME_COLORS.light },
+    { media: "(prefers-color-scheme: dark)", color: THEME_COLORS.dark },
+  ],
+  colorScheme: "light dark",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" data-theme="dark" className={mona.variable} suppressHydrationWarning>
+    <html lang="en" data-theme="light" className={`${display.variable} ${text.variable}`} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
       </head>

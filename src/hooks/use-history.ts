@@ -7,17 +7,23 @@ import type { HistoryStore } from "@/lib/history/types";
 export interface HistoryLists {
   active: PromptRecord[];
   deleted: PromptRecord[];
+  /** Versions per prompt id. */
+  counts: Record<string, number>;
   loaded: boolean;
 }
 
 /** Live view of the history store; reloads after every write. */
 export function useHistoryLists(store: HistoryStore): HistoryLists {
-  const [lists, setLists] = useState<HistoryLists>({ active: [], deleted: [], loaded: false });
+  const [lists, setLists] = useState<HistoryLists>({ active: [], deleted: [], counts: {}, loaded: false });
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
-      const [active, deleted] = await Promise.all([store.list({ deleted: false }), store.list({ deleted: true })]);
-      if (!cancelled) setLists({ active, deleted, loaded: true });
+      const [active, deleted, counts] = await Promise.all([
+        store.list({ deleted: false }),
+        store.list({ deleted: true }),
+        store.versionCounts(),
+      ]);
+      if (!cancelled) setLists({ active, deleted, counts, loaded: true });
     };
     void load();
     const unsub = store.subscribe(() => void load());

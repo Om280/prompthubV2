@@ -12,6 +12,8 @@ export interface HistoryStore {
   get(id: string): Promise<PromptRecord | undefined>;
   /** Oldest first. */
   getVersions(promptId: string): Promise<VersionRecord[]>;
+  /** How many versions each prompt has, keyed by prompt id (one pass, for the history rows). */
+  versionCounts(): Promise<Record<string, number>>;
   /** Creates or replaces the prompt record. */
   putPrompt(record: PromptRecord): Promise<void>;
   addVersion(version: VersionRecord): Promise<void>;
