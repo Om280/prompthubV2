@@ -1,6 +1,6 @@
 # PromptHub — Architecture
 
-Status: Phase 0 draft · Last updated: 2026-11-23
+Status: Phase 0 draft, revised for auth and the Gemini free-tier plan · Last updated: 2026-11-24
 
 ## 1. Stack (versions checked on npm 2026-11-23)
 
@@ -12,18 +12,16 @@ Status: Phase 0 draft · Last updated: 2026-11-23
 | Components | shadcn/ui (copied into `src/components/ui`), Radix primitives | shadcn CLI 4.23.x |
 | Icons | lucide-react | 1.78.x |
 | Motion | motion (`motion/react`) | 14.14.x |
-| AI | Vercel AI SDK core `ai` + `@ai-sdk/openai`, `@ai-sdk/anthropic`, `@ai-sdk/google` | ai 7.0.x, providers 4.0.x |
+| AI | Google Gemini API, free tier only (owner's server-side key); client library chosen in the AI phase | none installed yet |
+| Auth, quota store | Supabase (`@supabase/ssr`, `@supabase/supabase-js`) | 0.12.7, 2.119.0 |
 | Validation | Zod 4 | 4.6.x |
 | Storage | IndexedDB via `idb` | 8.0.x |
 | Tests | Vitest + Testing Library + `fake-indexeddb`; Playwright | vitest 5.1.x, @playwright/test 1.65.x |
 | Runtime | Node 24 (local), Node runtime for route handlers | |
 
-AI SDK v7 notes, from the current docs: structured output uses `generateText`/`streamText` with
-`output: Output.object({ schema })`. Validation failure throws `NoObjectGeneratedError`, and a missing
-output throws `NoOutputGeneratedError`; check both with `.isInstance()`. In a stream, errors arrive
-*inside* the stream and are handled with `onError`. The Google provider defaults to
-`GOOGLE_GENERATIVE_AI_API_KEY`, so we construct it explicitly with `createGoogle({ apiKey:
-process.env.GEMINI_API_KEY })`. Re-verify exact factory names in Phase 3 before coding.
+AI phase note: whichever client is chosen must be constructed explicitly with `GEMINI_API_KEY`
+(Google SDK defaults use other env names). Verify factory names and options against current docs before
+coding, and send no tools, grounding or sampling parameters (see §5).
 
 ## 2. System overview
 
@@ -37,11 +35,11 @@ Browser (client components)                           Server (Next route handler
 │ session store (useReducer + context)  │  NDJSON   │        │                                  │
 │ history repo (idb) ── IndexedDB       │           │        ▼                                  │
 └───────────────────────────────────────┘           │ lib/ai/engine.ts  ← single entry point    │
-                                                    │   ├─ registry.ts  (detect configured)     │
-                                                    │   ├─ fallback.ts  (ordered retry)         │
+                                                    │   ├─ status.ts    (Gemini readiness)      │
+                                                    │   ├─ gemini-*.ts  (allowlist, errors)     │
                                                     │   ├─ prompts/*    (meta-prompts per task) │
                                                     │   ├─ basic/*      (template Basic Mode)   │
-                                                    │   └─ providers/{openai,anthropic,google}  │
+                                                    │   └─ (AI phase) gemini adapter, no fallback│
                                                     └──────────────────────────────────────────┘
 ```
 
@@ -70,10 +68,11 @@ src/
     prompting/  brief, profiles/, evaluate,
                 shared                       LEAD (target profiles; pure TS, used by Basic Mode and
                                              by AI meta-prompts via each profile's `guidance`)
-    ai/         engine, registry, fallback,
-                errors, prompts/, basic/,
-                providers/                   AI
-    server/     env.ts, rate-limit.ts        AI
+    ai/         engine, status, gemini-models,
+                gemini-errors, cancellation,
+                disclosure, errors, basic/   AI
+    server/     env, guard, quota, auth, …   AI
+    supabase/   config, client, server, proxy  (auth)
     client/     api.ts, ndjson.ts            FE   (typed fetch + NDJSON reader of the contracts)
     history/    db.ts, repo.ts, search.ts    FE
     mock/       fixtures.ts                  FE   (Phase 1 only; removed or test-only after Phase 2)
@@ -125,41 +124,74 @@ under `docs/reviews/`.
 
 ## 5. Server / AI architecture
 
-- `lib/server/env.ts` reads and validates server env with Zod. It imports `server-only`, so importing it
-  from a client file fails the build.
-- `registry.ts` builds `ProviderAdapter` objects only for providers whose key is present:
+Revised for the product owner's AI plan (feature/auth, v1.3): **Google Gemini only, free tier only,
+with the owner's single server-side key.** No OpenAI, Anthropic or other provider, no paid Gemini
+model, no paid fallback, and no fallback to another model. The multi-provider registry,
+`PROVIDER_ORDER`, `OPENAI_*`/`ANTHROPIC_*` keys and per-provider `*_MODEL` vars are gone. AI generation
+itself is the next phase; this build ships the configuration, status, quota and error-mapping layers,
+with no Gemini calls and no AI SDK packages.
 
-  ```ts
-  interface ProviderAdapter {
-    id: 'openai' | 'anthropic' | 'google';
-    label: string;              // "OpenAI", "Anthropic", "Google Gemini"
-    model: string;              // resolved from env override or default
-    languageModel(): LanguageModel;
-  }
-  ```
+- `lib/server/env.ts` reads and validates server env with Zod. Secrets (`GEMINI_API_KEY`,
+  `SUPABASE_SECRET_KEY`) become booleans during parsing. The single module that needs a value reads it
+  from `process.env` at the point of use (`quota.ts` for the Supabase secret; the Gemini adapter, later,
+  for the key).
+- `lib/ai/gemini-models.ts`: `FREE_TIER_TEXT_MODELS` allowlist, each entry `verifiedOn: "2026-11-23"`,
+  source https://aistudio.google.com/docs/pricing (`gemini-3.8-flash`, `gemini-3.6-flash`,
+  `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-3-flash-preview`, `gemini-2.5-flash-lite`).
+  It also has an explicit deny-list of paid-only ids plus denied families (`-pro`, image, Omni, Genie,
+  TTS/live/audio). `GEMINI_MODEL` must be on the allowlist. Otherwise status is `not-configured` with a
+  message naming the problem, and no other model is substituted. No default model in code;
+  `docs/AUTH_SETUP.md` recommends `gemini-3.5-flash-lite`. Adapter notes: no tools or grounding (Google
+  Search is "Not available" on the free tier for the 3.x text models), and Gemini 3.6+ ignores
+  temperature/top_p/top_k.
+- `lib/ai/status.ts` `aiReadiness()` checks, in order: `AI_ENABLED` (the emergency switch; `false` →
+  `unavailable`), key present, model allowed, quota store configured (Supabase + `SUPABASE_SECRET_KEY`),
+  `GEMINI_PROJECT_RPM`/`TPM`/`RPD` set, generation built. `aiStatusResponse()` turns that and the
+  verified session into `GET /api/providers`.
+- `lib/ai/gemini-errors.ts` `mapGeminiError()`: Google `429 RESOURCE_EXHAUSTED` → `quota_exhausted`
+  (503) with `resetsAt` (next Pacific midnight for per-day quotas, else now + `RetryInfo.retryDelay`).
+  Everything else → `provider_unavailable`. **No retries, no fallback.** The provider message is logged
+  (redacted), never forwarded.
+- `lib/ai/cancellation.ts` `aiCallSignal(request.signal, AI_TIMEOUT_MS)`: the hook the Gemini call
+  will use, so it is cancelled on client abort or timeout (30 s default).
+- `lib/ai/disclosure.ts`: the exact first-use AI notice. On the free tier Google uses submitted content
+  to improve its products. Shown on `/privacy` now; the first-use dialog comes with AI.
+- **Meta-prompts** (later phase): one builder per task plus per-target style guides. The user's idea,
+  answers and text are passed as delimited data, never concatenated into instructions. Output is
+  validated with one repair retry; a failure is an error, never Basic Mode output.
 
-  Models are set by env (`OPENAI_MODEL`, `ANTHROPIC_MODEL`, `GEMINI_MODEL`). Defaults are decided and
-  verified against each provider's current model list in Phase 3: Anthropic `claude-sonnet-5-5`, Gemini
-  `gemini-3.5-flash`, OpenAI's current general flagship.
-- `engine.ts` exposes `clarify()`, `generate()` and `transform()`. Each picks the engine with
-  `fallback.ts`.
-- **Fallback policy:** providers are tried in `PROVIDER_ORDER`, with the request's preferred provider
-  first when one is given. Move to the next provider on: missing response, 429, 5xx, timeout (clarify
-  20 s, first token 25 s), auth errors (a bad key is logged server-side and that provider is skipped for
-  5 minutes), or invalid structured output after one repair retry. **No fallback after the first delta
-  has been sent**; a mid-stream failure ends with an `error` event. When every provider fails, the
-  response is an error, never Basic Mode output. Basic Mode is used only when *zero* providers are
-  configured, so the app never presents template text as AI output.
-- **Meta-prompts** (`prompts/`): one builder per task (clarify, generate, transform) plus per-target
-  style guides (`targets/chatgpt.ts`, `claude.ts`, `gemini.ts`) and per-length budgets. The user's idea
-  and answers are passed as delimited data, never concatenated into instructions.
-- **Clarify** uses `generateText` + `Output.object(ClarifyModelOutput)`. Generate and transform use
-  `streamText` for plain text, wrapped in our NDJSON stream.
-- **Errors** (`errors.ts`) map SDK and HTTP errors to an `ErrorCode` union (see API_CONTRACTS §5).
-- **Rate limit:** an in-memory sliding window per IP (30 req/min across AI routes). It is best-effort on
-  serverless and documented as such. An Upstash adapter can be added at deploy time.
+### 5.1 Quota design (persistent, atomic)
 
-## 6. Basic Mode (no providers), as built in Phase 2
+AI limits live in Supabase Postgres (`supabase/migrations/0001_ai_quota.sql`), reached only with the
+server-side secret key through `lib/server/quota.ts` (`QuotaStore`). They are never held in memory for
+AI; `createMemoryQuotaStore` is a test double. If the store isn't configured, AI is `not-configured`.
+If it fails at runtime, the guard fails closed (`internal`, "couldn't check your AI limits").
+
+- Tables, all with RLS on and no policies: `ai_rate_counters (bucket, window_start, count)`,
+  `ai_consumed (bucket, window_start, key, amount)` for idempotency, `ai_inflight (bucket,
+  request_id, request_hash, expires_at)` and `ai_usage` (tokens, op, model, status, duration and a
+  request hash; **no prompt text**).
+- Functions (`security definer`, pinned `search_path`, execute granted to `service_role` only):
+  - `ai_consume(buckets, windows, limits, amounts, keys)` checks every window under row locks in
+    bucket order and increments all of them or none. A window whose `(bucket, period, key)` was
+    already consumed is skipped, so a retry with the same `requestId` is never double-counted, and
+    clarify + generate of one `workflowId` count once.
+  - `ai_adjust` reconciles the TPM estimate with the actual tokens.
+  - `ai_acquire_inflight` / `ai_release_inflight` manage TTL'd leases (advisory lock per user;
+    `duplicate` for the same request or identical content). `ai_record_usage` and `ai_prune` complete
+    the set.
+- Buckets and defaults (all env-configurable): see API_CONTRACTS §5 "AI limits". In short: 5
+  workflows and 5 refinements per user per Pacific day, 3/min per user, 10/min per IP, 1 in flight per
+  user (TTL 120 s), 20,000 input characters, and app-wide RPM/TPM/RPD ceilings at
+  `AI_GLOBAL_SAFETY_RATIO` (0.7) × the project's verified limits from
+  https://aistudio.google.com/rate-limit. There are no hardcoded free-tier numbers.
+- `guardAiRoute` order: verified user → body validation → readiness → `requestId`/`workflowId` and
+  input cap → in-flight lease → `ai_consume`. The lease carries `signal`, `reconcileTokens()`,
+  `recordUsage()` and an idempotent `release()` (on completion, error, stream cancel and abort).
+- Day windows start at midnight America/Los_Angeles (when Gemini's daily free quota resets), so DST
+  days are 23 or 25 hours. The SQL and `lib/server/quota-windows.ts` compute the same windows.
+
+## 6. Basic Mode (no AI), as built in Phase 2
 
 - `basic/classify.ts`: weighted keyword scores give one of the 8 `TaskCategory` values (falling back to
   `general`). `splitMaterial` separates pasted code, CSV and long text from the instruction.
@@ -189,8 +221,48 @@ under `docs/reviews/`.
   - these modules are imported only from route handlers and tests (checked in the Phase 2 audit);
   - `env.ts` turns each key into a boolean while parsing, so no key value can be returned or logged.
 - Zod validation at every route boundary; input size caps; JSON body limit 64 KB.
-- No provider error bodies are forwarded to the client verbatim; messages are mapped.
+- No provider or database error bodies are forwarded to the client verbatim; messages are mapped.
+- `GEMINI_API_KEY` and `SUPABASE_SECRET_KEY` are server-only; `redact()` masks them in logs.
 - CSP and security headers set in `next.config.ts` at Phase 6.
+
+## 7a. Auth and abuse prevention
+
+Added with Google sign-in (feature/auth). Setup: `docs/AUTH_SETUP.md`.
+
+- **Supabase Auth, Google only, PKCE, SSR cookies.** `src/lib/supabase/{config,client,server,proxy}.ts`.
+  `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` are public by design and
+  inlined at build. If either is missing, auth is "not configured": Basic Mode works and Sign in is
+  disabled with the reason. The server-only `SUPABASE_SECRET_KEY` is used for the AI quota store and
+  nothing else.
+- **Proxy** (`src/proxy.ts`, Next 16's renamed middleware, Node runtime): on every page and API request
+  (static assets excluded) it creates a per-request server client and calls `getClaims()`, which
+  refreshes the session cookie when needed. It also redirects signed-out visitors from `/account`.
+  It's a no-op when auth isn't configured.
+- **Identity** is only `getVerifiedUser()` (`src/lib/server/auth.ts`). It calls `getClaims()`, which
+  verifies the JWT signature against the project's JWKS (or the Auth server for symmetric keys) and
+  its expiry. `getSession()`'s user, `x-user-id`-style headers and ids in bodies are never trusted.
+  Expired, forged and missing sessions are all "signed out".
+- **Routes:** `/auth/callback` (code exchange; same-origin, path-only `next`), `POST /auth/signout`
+  (same-origin check), `GET /api/session` (verified user for the UI), `/account` (server component
+  behind Suspense, because Cache Components makes the cookie read request-time), and `/privacy`
+  (public notice).
+- **Guards** (`src/lib/server/guard.ts`). Every AI route must call `guardAiRoute(request, …)` first
+  (order and buckets in §5.1). Public Basic Mode routes call `guardPublicRoute(request)`: an in-memory
+  per-IP window (`RATE_LIMIT_PER_MINUTE`, 30), then at most 2 in flight per user (per IP when signed
+  out). That's fine because these routes never call Gemini. Both leases release on completion, error,
+  stream cancel and request abort (`ndjsonResponse` takes `release` as `onFinish`). `/api/transform` is
+  the only AI route today.
+- **Logging:** `logServerError` (`src/lib/server/log.ts`) passes every line through `redact()`, which
+  masks Google API keys (`AIza…`), the literal values of `GEMINI_API_KEY` and `SUPABASE_SECRET_KEY`,
+  bearer tokens and JWTs. Provider, database and auth error bodies are never forwarded to the client.
+- **Privacy:** history stays in IndexedDB on the device; signing in doesn't sync or upload it.
+  Supabase holds Google account basics, quota counters and usage metadata, never prompt text.
+  `/privacy` says so, and says that AI text goes to Gemini's free tier, where Google uses content to
+  improve its products.
+- **Tests:** unit tests mock the Supabase client at `getClaims`/route level and the quota store with
+  the memory double and a mocked RPC client. The SQL itself must be verified against a real database
+  (`docs/AUTH_SETUP.md` §8). E2E runs the real PKCE flow against `tests/e2e/fake-supabase` (ES256-signed
+  tokens, JWKS, refresh, logout), started by Playwright's `webServer` array.
 
 ## 8. Design system
 
@@ -274,7 +346,7 @@ Installed skills were checked in `.claude/skills/`. There is no `webapp-testing`
 | Phase | Skills |
 | --- | --- |
 | 1 UI | `frontend-design` (primary), `emil-design-eng`, `animate`, `choreograph`, `mobile-native` |
-| 2–3 | `claude-api` (Anthropic specifics); vendor docs for OpenAI and Gemini |
+| 2–3 | Google Gemini API docs (free tier); Supabase docs |
 | 4 | `gestures` (mobile rail sheet), `animation-performance` |
 | 5 QA | `playwright-cli`, `break-ui`; user-invoked only: `/review-animations` |
 | 6 | none |

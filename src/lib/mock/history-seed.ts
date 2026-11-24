@@ -6,7 +6,7 @@ const MIN = 60_000;
 const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
 
-const ENGINE: Engine = { kind: "ai", provider: "anthropic", model: "claude-sonnet-5-5" };
+const ENGINE: Engine = { kind: "ai", provider: "gemini", tier: "free", model: "gemini-3.5-flash-lite" };
 
 interface SeedSpec {
   key: string;

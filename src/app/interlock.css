@@ -366,24 +366,26 @@
     background: var(--ink);
     border-color: var(--ink);
   }
-  /* Basic Mode, preview data, not configured: a hollow ring, nothing is connected. */
+  /* Basic Mode, preview data, AI not in this build or not set up: a hollow ring, nothing connected. */
   .ih-engine-dot[data-engine="basic"],
   .ih-engine-dot[data-engine="preview"],
+  .ih-engine-dot[data-engine="unavailable"],
   .ih-engine-dot[data-engine="not-configured"] {
     border-color: var(--ink-3);
   }
-  /* Waiting on something: checking, or a sign-in. */
+  /* Waiting on something: the check itself, or a sign-in. */
   .ih-engine-dot[data-engine="loading"],
   .ih-engine-dot[data-engine="sign-in-required"] {
     border-style: dashed;
   }
-  /* Can't run right now. */
+  .ih-engine-dot[data-engine="sign-in-required"] {
+    border-color: var(--cobalt);
+  }
+  /* Can't run right now: the check failed, or the free daily allowance is used up. */
   .ih-engine-dot[data-engine="failed"],
-  .ih-engine-dot[data-engine="unavailable"],
   .ih-engine-dot[data-engine="quota-exhausted"] {
     border-color: var(--danger);
   }
-  .ih-engine-dot[data-engine="unavailable"],
   .ih-engine-dot[data-engine="quota-exhausted"] {
     background: var(--danger);
   }

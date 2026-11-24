@@ -1,96 +1,177 @@
 /**
- * Server environment, validated with Zod. Server-only: import this module only from route handlers
- * and `src/lib/ai/**` (the `server-only` package isn't installed yet; see the Phase 2 report).
+ * Server environment, validated with Zod. Server-only: import this module only from route handlers,
+ * `src/lib/ai/**` and `src/lib/server/**`.
  *
- * The parsed result never holds key values: keys are reduced to booleans during parsing, so nothing
- * downstream can log, return or echo a key or a fragment of one.
+ * AI runs only on Google Gemini's free tier, with the app owner's single key (`GEMINI_API_KEY`).
+ * Secrets are reduced to booleans while parsing, so nothing downstream can log, return or echo a key.
+ * The one module that needs a secret's value reads it from `process.env` itself, at the point of use
+ * (`quota.ts` for `SUPABASE_SECRET_KEY`; the later Gemini adapter for `GEMINI_API_KEY`).
+ *
+ * There are no hardcoded free-tier numbers: the project's RPM/TPM/RPD come from the operator (copied
+ * from https://aistudio.google.com/rate-limit). Until they are set, AI is `not-configured`.
  */
 import { z } from "zod";
-import type { ProviderId } from "@/lib/contracts";
 
-export const PROVIDER_IDS: readonly ProviderId[] = ["anthropic", "openai", "google"];
+export const DEFAULT_RATE_LIMIT_PER_MINUTE = 30;
+/** In-flight Basic Mode requests per user (per IP when signed out). In-memory; not configurable. */
+export const MAX_CONCURRENT_REQUESTS = 2;
 
-/** Env var holding each provider's key. Google's differs from the AI SDK default on purpose. */
-export const KEY_ENV: Record<ProviderId, "OPENAI_API_KEY" | "ANTHROPIC_API_KEY" | "GEMINI_API_KEY"> = {
-  openai: "OPENAI_API_KEY",
-  anthropic: "ANTHROPIC_API_KEY",
-  google: "GEMINI_API_KEY",
-};
+export const AI_LIMIT_DEFAULTS = {
+  userDailyWorkflows: 5,
+  userDailyRefinements: 5,
+  userPerMinute: 3,
+  ipPerMinute: 10,
+  maxConcurrentPerUser: 1,
+  inflightTtlSeconds: 120,
+  maxInputChars: 20_000,
+  maxOutputTokens: 2048,
+  timeoutMs: 30_000,
+  globalSafetyRatio: 0.7,
+} as const;
 
-/** A key counts as present when it has any non-whitespace character. Reduced to a boolean here. */
-const keyPresent = z
+/** Whole number ≥ 1. Absent or invalid → `fallback`. 0 and negatives clamp to 1 (never disabled). */
+const positiveInt = (fallback: number) =>
+  z
+    .string()
+    .optional()
+    .transform((raw): number => {
+      const t = raw?.trim() ?? "";
+      if (!/^-?\d+$/.test(t)) return fallback;
+      const n = Number(t);
+      if (!Number.isSafeInteger(n)) return fallback;
+      return Math.max(1, n);
+    });
+
+/** Whole number ≥ 1 with no default: absent or invalid → null (AI refuses until it is set). */
+const requiredPositiveInt = z
+  .string()
+  .optional()
+  .transform((raw): number | null => {
+    const t = raw?.trim() ?? "";
+    if (!/^\d+$/.test(t)) return null;
+    const n = Number(t);
+    return Number.isSafeInteger(n) && n >= 1 ? n : null;
+  });
+
+/** A ratio in (0, 1]. Absent or invalid → the default. */
+const ratio = (fallback: number) =>
+  z
+    .string()
+    .optional()
+    .transform((raw): number => {
+      const t = raw?.trim() ?? "";
+      if (!/^\d*\.?\d+$/.test(t)) return fallback;
+      const n = Number(t);
+      return n > 0 && n <= 1 ? n : fallback;
+    });
+
+/** On unless explicitly "false", "0", "off" or "no" (the emergency switch). */
+const enabledFlag = z
+  .string()
+  .optional()
+  .transform((raw) => !/^(false|0|off|no)$/i.test(raw?.trim() ?? ""));
+
+const present = z
   .string()
   .optional()
   .transform((v) => typeof v === "string" && v.trim().length > 0);
 
-/** Comma-separated provider ids; unknown entries are ignored, missing ones appended in default order. */
-const providerOrder = z
+const trimmedOrNull = z
   .string()
   .optional()
-  .transform((raw): ProviderId[] => {
-    const listed = (raw ?? "")
-      .split(",")
-      .map((s) => s.trim().toLowerCase())
-      .filter((s): s is ProviderId => (PROVIDER_IDS as readonly string[]).includes(s));
-    const unique = [...new Set(listed)];
-    return [...unique, ...PROVIDER_IDS.filter((p) => !unique.includes(p))];
-  });
-
-export const DEFAULT_RATE_LIMIT_PER_MINUTE = 30;
-
-/**
- * Requests per minute per IP on the AI routes. Absent or not a whole number → default.
- * Values below 1 clamp to 1: the limiter can be loosened (e.g. for e2e runs) but never disabled.
- */
-const rateLimitPerMinute = z
-  .string()
-  .optional()
-  .transform((raw): number => {
-    const t = raw?.trim() ?? "";
-    if (!/^-?\d+$/.test(t)) return DEFAULT_RATE_LIMIT_PER_MINUTE;
-    const n = Number(t);
-    if (!Number.isSafeInteger(n)) return DEFAULT_RATE_LIMIT_PER_MINUTE;
-    return Math.max(1, n);
-  });
+  .transform((v) => (typeof v === "string" && v.trim() ? v.trim() : null));
 
 const EnvSchema = z.object({
-  OPENAI_API_KEY: keyPresent,
-  ANTHROPIC_API_KEY: keyPresent,
-  GEMINI_API_KEY: keyPresent,
-  PROVIDER_ORDER: providerOrder,
-  RATE_LIMIT_PER_MINUTE: rateLimitPerMinute,
+  RATE_LIMIT_PER_MINUTE: positiveInt(DEFAULT_RATE_LIMIT_PER_MINUTE),
+  AI_ENABLED: enabledFlag,
+  GEMINI_API_KEY: present,
+  GEMINI_MODEL: trimmedOrNull,
+  SUPABASE_SECRET_KEY: present,
+  GEMINI_PROJECT_RPM: requiredPositiveInt,
+  GEMINI_PROJECT_TPM: requiredPositiveInt,
+  GEMINI_PROJECT_RPD: requiredPositiveInt,
+  AI_GLOBAL_SAFETY_RATIO: ratio(AI_LIMIT_DEFAULTS.globalSafetyRatio),
+  AI_USER_DAILY_WORKFLOWS: positiveInt(AI_LIMIT_DEFAULTS.userDailyWorkflows),
+  AI_USER_DAILY_REFINEMENTS: positiveInt(AI_LIMIT_DEFAULTS.userDailyRefinements),
+  AI_USER_PER_MINUTE: positiveInt(AI_LIMIT_DEFAULTS.userPerMinute),
+  AI_IP_PER_MINUTE: positiveInt(AI_LIMIT_DEFAULTS.ipPerMinute),
+  AI_MAX_CONCURRENT_PER_USER: positiveInt(AI_LIMIT_DEFAULTS.maxConcurrentPerUser),
+  AI_INFLIGHT_TTL_SECONDS: positiveInt(AI_LIMIT_DEFAULTS.inflightTtlSeconds),
+  AI_MAX_INPUT_CHARS: positiveInt(AI_LIMIT_DEFAULTS.maxInputChars),
+  AI_MAX_OUTPUT_TOKENS: positiveInt(AI_LIMIT_DEFAULTS.maxOutputTokens),
+  AI_TIMEOUT_MS: positiveInt(AI_LIMIT_DEFAULTS.timeoutMs),
 });
 
-export interface ServerEnv {
-  /** Which provider keys are set. Booleans only. */
-  keys: Record<ProviderId, boolean>;
-  /** Fallback order, every provider exactly once. */
-  providerOrder: ProviderId[];
-  /** AI-route limit per IP per minute; always ≥ 1. */
-  rateLimitPerMinute: number;
+export interface ProjectQuota {
+  /** The verified Gemini project limits (requests/min, tokens/min, requests/day), or null if unset. */
+  rpm: number | null;
+  tpm: number | null;
+  rpd: number | null;
+  /** App-wide ceilings are this fraction of the project limits (default 0.7). */
+  safetyRatio: number;
 }
+
+export interface AiLimits {
+  userDailyWorkflows: number;
+  userDailyRefinements: number;
+  userPerMinute: number;
+  ipPerMinute: number;
+  maxConcurrentPerUser: number;
+  inflightTtlSeconds: number;
+  /** Idea, answers and prompt text combined. */
+  maxInputChars: number;
+  maxOutputTokens: number;
+  timeoutMs: number;
+}
+
+export interface ServerEnv {
+  /** Basic Mode requests per minute per IP; always ≥ 1. */
+  rateLimitPerMinute: number;
+  /** The emergency switch. false → no Gemini calls at all. */
+  aiEnabled: boolean;
+  /** `GEMINI_API_KEY` is set. Boolean only. */
+  geminiKeyPresent: boolean;
+  /** `GEMINI_MODEL` as configured (trimmed), or null. Validated against the allowlist elsewhere. */
+  geminiModel: string | null;
+  /** `SUPABASE_SECRET_KEY` is set (needed for the persistent quota store). Boolean only. */
+  supabaseSecretKeyPresent: boolean;
+  project: ProjectQuota;
+  ai: AiLimits;
+}
+
+const KEYS = Object.keys(EnvSchema.shape) as (keyof typeof EnvSchema.shape)[];
 
 /** Reads the environment on each call so tests and restarts see current values. */
 export function readServerEnv(source: Record<string, string | undefined> = process.env): ServerEnv {
-  const parsed = EnvSchema.safeParse({
-    OPENAI_API_KEY: source.OPENAI_API_KEY,
-    ANTHROPIC_API_KEY: source.ANTHROPIC_API_KEY,
-    GEMINI_API_KEY: source.GEMINI_API_KEY,
-    PROVIDER_ORDER: source.PROVIDER_ORDER,
-    RATE_LIMIT_PER_MINUTE: source.RATE_LIMIT_PER_MINUTE,
-  });
-  if (!parsed.success) {
-    // Only possible with non-string values; treat as "nothing configured" rather than failing requests.
-    return {
-      keys: { openai: false, anthropic: false, google: false },
-      providerOrder: [...PROVIDER_IDS],
-      rateLimitPerMinute: DEFAULT_RATE_LIMIT_PER_MINUTE,
-    };
-  }
-  const e = parsed.data;
+  const input = Object.fromEntries(KEYS.map((k) => [k, typeof source[k] === "string" ? source[k] : undefined]));
+  const e = EnvSchema.parse(input);
   return {
-    keys: { openai: e.OPENAI_API_KEY, anthropic: e.ANTHROPIC_API_KEY, google: e.GEMINI_API_KEY },
-    providerOrder: e.PROVIDER_ORDER,
     rateLimitPerMinute: e.RATE_LIMIT_PER_MINUTE,
+    aiEnabled: e.AI_ENABLED,
+    geminiKeyPresent: e.GEMINI_API_KEY,
+    geminiModel: e.GEMINI_MODEL,
+    supabaseSecretKeyPresent: e.SUPABASE_SECRET_KEY,
+    project: {
+      rpm: e.GEMINI_PROJECT_RPM,
+      tpm: e.GEMINI_PROJECT_TPM,
+      rpd: e.GEMINI_PROJECT_RPD,
+      safetyRatio: e.AI_GLOBAL_SAFETY_RATIO,
+    },
+    ai: {
+      userDailyWorkflows: e.AI_USER_DAILY_WORKFLOWS,
+      userDailyRefinements: e.AI_USER_DAILY_REFINEMENTS,
+      userPerMinute: e.AI_USER_PER_MINUTE,
+      ipPerMinute: e.AI_IP_PER_MINUTE,
+      maxConcurrentPerUser: e.AI_MAX_CONCURRENT_PER_USER,
+      inflightTtlSeconds: e.AI_INFLIGHT_TTL_SECONDS,
+      maxInputChars: e.AI_MAX_INPUT_CHARS,
+      maxOutputTokens: e.AI_MAX_OUTPUT_TOKENS,
+      timeoutMs: e.AI_TIMEOUT_MS,
+    },
   };
+}
+
+/** The app-wide ceiling for one project limit: floor(limit × ratio), at least 1. */
+export function safetyCeiling(limit: number, ratio: number): number {
+  return Math.max(1, Math.floor(limit * ratio));
 }

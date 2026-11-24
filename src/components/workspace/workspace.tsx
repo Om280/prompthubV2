@@ -3,7 +3,7 @@
 import { AnimatePresence, motion, MotionConfig } from "motion/react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import type { ProvidersResponse } from "@/lib/contracts";
+import type { AiStatusResponse } from "@/lib/contracts";
 import type { PromptHubClient } from "@/lib/client/types";
 import type { HistoryStore } from "@/lib/history/types";
 import { createApiClient } from "@/lib/client/api";
@@ -22,7 +22,8 @@ import { useIsDesktopRail, useIsMobile, useKeyLabels, useReducedMotion } from "@
 import { initialSession, latest, useSession, type SessionState } from "@/hooks/use-session";
 import { keys as match, useShortcuts } from "@/hooks/use-shortcuts";
 import { applyTheme } from "@/hooks/use-theme";
-import { cn, isMacPlatform, PROVIDER_LABELS } from "@/lib/utils";
+import { cn, isMacPlatform } from "@/lib/utils";
+import { AuthProvider, useAuth } from "@/components/auth/auth-context";
 import { Composer, EntranceFade } from "./composer";
 import { Editor } from "./editor";
 import { Header } from "./header";
@@ -51,7 +52,9 @@ export function Workspace() {
   return (
     <MotionConfig reducedMotion="user">
       <TooltipProvider>
-        <WorkspaceInner key={config ? `preview-${search}` : "default"} config={config} />
+        <AuthProvider>
+          <WorkspaceInner key={config ? `preview-${search}` : "default"} config={config} />
+        </AuthProvider>
         <Toaster />
       </TooltipProvider>
     </MotionConfig>
@@ -96,8 +99,9 @@ function textToCopy(s: SessionState): string {
 function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
   const [env] = useState(() => createEnv(config));
   const { client, history } = env;
-  const [providers, setProviders] = useState<ProvidersResponse | null>(null);
-  const [providersFailed, setProvidersFailed] = useState(false);
+  const [aiStatus, setAiStatus] = useState<AiStatusResponse | null>(null);
+  const [aiStatusFailed, setAiStatusFailed] = useState(false);
+  const authStatus = useAuth().state.status;
   const [railOpen, setRailOpenState] = useState(config?.historyOpen ?? false);
   const [railAnimated, setRailAnimated] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -123,34 +127,30 @@ function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
     liveTimer.current = setTimeout(() => setLiveMessage(message), 60);
   }, []);
 
-  const fetchProviders = useCallback(
+  const fetchAiStatus = useCallback(
     () =>
-      client.getProviders().then(
+      client.getAiStatus().then(
         (p) => {
-          setProviders(p);
-          setProvidersFailed(false);
+          setAiStatus(p);
+          setAiStatusFailed(false);
         },
-        () => setProvidersFailed(true),
+        () => setAiStatusFailed(true),
       ),
     [client],
   );
-  const loadProviders = useCallback(() => {
-    setProvidersFailed(false);
-    void fetchProviders();
-  }, [fetchProviders]);
+  const loadAiStatus = useCallback(() => {
+    setAiStatusFailed(false);
+    void fetchAiStatus();
+  }, [fetchAiStatus]);
 
   const { state, actions } = useSession(
     client,
     history,
     {
       onAnnounce: announce,
-      onAiRequired: loadProviders,
+      onAiRequired: loadAiStatus,
       onPersistError: () => toast("Couldn't save this version to history. It stays open here."),
       onStreamStart: (activity, tone) => announce(activity === "generate" ? "Writing" : activityLabel(activity, tone)),
-      onFallback: (engine) => {
-        const from = engine.fellBackFrom?.[engine.fellBackFrom.length - 1];
-        if (from) toast(`${PROVIDER_LABELS[from]} didn't respond. Retried with ${PROVIDER_LABELS[engine.provider]}.`);
-      },
     },
     () => env.initial,
   );
@@ -160,10 +160,12 @@ function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
     if (config?.theme) applyTheme(config.theme, false);
   }, [config?.theme]);
 
-  // Fetched once per mount, and again after an unexpected ai_required answer.
+  // Fetched once per mount, when sign-in state settles or changes, and after an unexpected
+  // ai_required answer.
   useEffect(() => {
-    void fetchProviders();
-  }, [fetchProviders]);
+    if (authStatus === "loading") return;
+    void fetchAiStatus();
+  }, [fetchAiStatus, authStatus]);
 
   // Desktop only: the composer has focus on load (§6.1).
   useEffect(() => {
@@ -293,13 +295,13 @@ function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
     { modalOpen: shortcutsOpen },
   );
 
-  const basic = providers?.mode === "basic";
+  const basic = aiStatus?.mode === "basic";
   const value: WorkspaceValue = {
     client,
     history,
-    providers,
-    providersFailed,
-    reloadProviders: loadProviders,
+    aiStatus,
+    aiStatusFailed,
+    reloadAiStatus: loadAiStatus,
     basic,
     preview: client.kind === "mock",
     state,

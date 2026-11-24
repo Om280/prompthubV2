@@ -4,7 +4,7 @@ import {
   type ClarifyRequest,
   type ClarifyResponse,
   type GenerateRequest,
-  type ProvidersResponse,
+  type AiStatusResponse,
   type StreamEvent,
   type TransformRequest,
 } from "@/lib/contracts";
@@ -20,7 +20,9 @@ export const ERROR_COPY = {
   promptTooLong: "This prompt is over 20,000 characters. Shorten it to keep editing.",
   invalid: "This request couldn't be sent as it is. Check the idea and try again.",
   aiRequired:
-    "Improve, Shorten, Expand and Tone need an AI provider. Add an API key to the server to turn them on.",
+    "Improve, Shorten, Expand and Tone need AI, which is coming in a later update. Basic Mode still works, and your prompt is kept.",
+  authRequired: "Sign in with Google to use AI features.",
+  tooManyConcurrent: "You already have 2 requests running. Wait for one to finish.",
   internal: "Something went wrong on the server. Try again in a minute.",
 } as const;
 
@@ -48,6 +50,7 @@ export function fallbackError(status: number, route: Route): ApiError {
     return { code: "invalid_request", message: route === "transform" ? ERROR_COPY.promptTooLong : ERROR_COPY.ideaTooLong };
   }
   if (status === 400 || status === 422) return { code: "invalid_request", message: ERROR_COPY.invalid };
+  if (status === 401) return { code: "auth_required", message: ERROR_COPY.authRequired };
   if (status === 409) return { code: "ai_required", message: ERROR_COPY.aiRequired };
   if (status === 429) return { code: "rate_limited", message: ERROR_COPY.rateLimited };
   if (status === 502 || status === 503 || status === 504) return { code: "provider_unavailable", message: ERROR_COPY.provider };
@@ -150,8 +153,8 @@ export function createApiClient(options: ApiClientOptions = {}): PromptHubClient
 
   return {
     kind: "api",
-    getProviders(): Promise<ProvidersResponse> {
-      return json("providers", { method: "GET", cache: "no-store" }, schemas.ProvidersResponse);
+    getAiStatus(): Promise<AiStatusResponse> {
+      return json("providers", { method: "GET", cache: "no-store" }, schemas.AiStatusResponse);
     },
     clarify(req: ClarifyRequest, signal?: AbortSignal): Promise<ClarifyResponse> {
       return json("clarify", post(req, signal), schemas.ClarifyResponse);

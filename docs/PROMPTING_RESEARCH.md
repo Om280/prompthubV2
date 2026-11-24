@@ -249,10 +249,40 @@ differentiation, length ordering, no-API-wrapper and documented-behaviour tests)
 These checks verify that the **profiles follow the documented guidance**. They do **not** show that one
 profile gets better answers from a model.
 
-**Comparative (Phase 3, requires keys):** for each task, send the PromptHub prompt and the user's raw
-idea to the target vendor's model, then have a blind pairwise judge (a different vendor's model, order
-randomized) score the answers on a rubric. Report win, tie and loss rates with sample sizes. Until that
-runs, the product claims only "structured following each vendor's published guidance."
+**Live generation check (opt-in, Gemini free tier only):** `npm run eval:gemini` sends the six fixture
+ideas through the real Gemini pipeline for all three targets and scores each generated prompt with the
+same deterministic rubric. It uses only the owner's free-tier key, it never runs in CI and it is capped
+by a request budget. It checks that the *model-written* prompts follow each profile. It does not measure
+answer quality on ChatGPT, Claude or Gemini.
+
+**Downstream comparison (not automated):** PromptHub calls no OpenAI or Anthropic API, so whether a
+Claude-profile prompt gets a better answer from Claude than a raw idea can only be tested by hand: paste
+both into each platform, blind the outputs and rate them. Until that is done and reported with sample
+sizes, the product claims only "structured following each vendor's published guidance."
+
+## 11. Re-verification, 2026-11-24
+
+All three guides were re-read (OpenAI, Anthropic at platform.claude.com, Google at aistudio.google.com).
+Every claim in §1–8 is still supported. The precise wording changed in places:
+
+| Claim | Current wording |
+| --- | --- |
+| [OAI] section order | Still Identity, Instructions, Examples, Context, "though the exact optimal content and order may vary by which model you are using". |
+| [OAI-L] assumptions | "Make reasonable, reversible assumptions … and state them if it progresses the task within scope." The ChatGPT assumption line stays limited to deliverable tasks. |
+| [OAI-L] self-contained | "The final answer must always be fully self-contained." |
+| [OAI-R] zero-shot first | Only on the o-series reasoning page. Google says the opposite ("Prompts without few-shot examples are likely to be less effective"). PromptHub's policy (§4: never invent examples, include the user's own) satisfies both. |
+| [ANT] prefill | Unsupported "starting with Claude 4.6 models"; older models still accept it. Not relevant to consumer chat. |
+| [ANT] verbosity | Latest models are "less verbose", except Opus 5, whose default responses "run longer". |
+| [GEM] verbosity | "By default, Gemini 3 models provide direct and efficient answers … you must explicitly request" detail. |
+| [GEM] reasoning | "Generally not necessary" to have the model outline its reasoning, not a ban. The default stays: no visible-reasoning instruction unless the user wants one. |
+
+New guidance that affects PromptHub:
+- **[GEM] Sampling parameters:** "Gemini 4 and Gemini 3.6+ models ignore custom values for temperature,
+  top_p, and top_k." The Gemini generation engine therefore sends none of them.
+- **[ANT] Model-specific pages:** Anthropic now publishes a prompting page per model. PromptHub can't know
+  which Claude model the user runs, so the Claude profile stays on the guidance common to all of them.
+- **[OAI] Prompt objects** are being retired in favour of prompts kept in application code. This doesn't
+  affect consumer prompts.
 
 ## Sources
 

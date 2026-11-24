@@ -68,7 +68,7 @@ export function readPreview(search: string): PreviewConfig | null {
   return cfg;
 }
 
-const AI = { kind: "ai", provider: "anthropic", model: "claude-sonnet-5-5" } as const;
+const AI = { kind: "ai", provider: "gemini", tier: "free", model: "gemini-3.5-flash-lite" } as const;
 
 function run(start: SessionState, actions: SessionAction[]): SessionState {
   return actions.reduce(sessionReducer, start);

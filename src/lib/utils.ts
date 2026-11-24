@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
 import { extendTailwindMerge } from "tailwind-merge";
-import type { Engine, ProviderId } from "@/lib/contracts";
+import type { Engine } from "@/lib/contracts";
 
 const twMerge = extendTailwindMerge({
   extend: {
@@ -64,37 +64,20 @@ export function relativeLong(ts: number, now: number): string {
   return `${Math.floor(d / DAY)} days ago`;
 }
 
-export const PROVIDER_LABELS: Record<ProviderId, string> = {
-  anthropic: "Anthropic",
-  openai: "OpenAI",
-  google: "Gemini",
-};
+/** "Gemini 3.5 Flash Lite" for "gemini-3.5-flash-lite": the model id, capitalised, nothing invented. */
+export function modelLabel(model: string): string {
+  const words = model
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((w) => (/^\d/.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1)));
+  return words.join(" ") || model;
+}
 
-const PROVIDER_SHORT: Record<ProviderId, string> = {
-  anthropic: "Claude",
-  openai: "OpenAI",
-  google: "Gemini",
-};
-
-/** "Claude Sonnet", "OpenAI GPT", "Gemini Flash" (DESIGN §8). */
 export function engineLabel(engine: Engine | { kind: "manual" } | null | undefined): string {
   if (!engine) return "";
   if (engine.kind === "basic") return "Basic Mode, no AI";
   if (engine.kind === "manual") return "you";
-  const model = engine.model.toLowerCase();
-  const family =
-    engine.provider === "anthropic"
-      ? /opus/.test(model)
-        ? "Opus"
-        : /haiku/.test(model)
-          ? "Haiku"
-          : "Sonnet"
-      : engine.provider === "google"
-        ? /pro/.test(model)
-          ? "Pro"
-          : "Flash"
-        : "GPT";
-  return `${PROVIDER_SHORT[engine.provider]} ${family}`;
+  return `${modelLabel(engine.model)} (free tier)`;
 }
 
 export function isMacPlatform(): boolean {
