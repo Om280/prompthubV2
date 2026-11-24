@@ -68,22 +68,33 @@ remaining Phase 4 work is 4.5 (a mobile pass on real devices) and the migration 
 - Lead tasks completed: Windows path-case fix for Vitest; source grounding made conditional on the
   task; a configurable rate limit for e2e runs.
 
-## Phase 3: Provider integrations and fallback
+## Phase 2.5: Final product decisions (2026-11-24)
 
-Before Phase 3 reads key values: add the `server-only` guard (ARCHITECTURE §7).
+| # | Task | Owner | Status |
+| --- | --- | --- | --- |
+| P.1 | Redesign: audit, three directions at `/design` (dev only); owner selected **Direction C "Interlock"**; A and B archived at tag `design-explorations-v1` | LEAD / FE | ✅ selected |
+| P.2 | Integrate Design C into `/` and every screen (`feature/design-c`) | FE | in progress |
+| P.3 | Supabase Google sign-in (PKCE, `proxy.ts`, `getClaims()`), account menu, `/account`, `/privacy` | AI (auth) | ✅ merged (5184ec5) |
+| P.4 | Gemini free-tier-only architecture: allowlist, persistent atomic quota in Supabase (`supabase/migrations/0001_ai_quota.sql`), emergency switch, disclosure | AI (auth) | ✅ merged |
+| P.5 | Re-verify vendor prompting guidance and Gemini free-tier eligibility | LEAD | ✅ 2026-11-24 |
 
-| # | Task | Owner |
-| --- | --- | --- |
-| 3.1 | Re-check AI SDK v7 and provider docs; pin model defaults | AI |
-| 3.2 | Adapters: OpenAI, Anthropic, Google; registry; `PROVIDER_ORDER` | AI |
-| 3.3 | Meta-prompts: clarify (structured, Gemini gives higher priority to an "example?" question), generate and transform. The generate step asks the model for a `PromptBrief`, then writes the prompt per `PROFILES[target].guidance`; `evaluatePrompt()` checks it, with one repair retry | AI |
-| 3.4 | Fallback + error mapping + repair retry + timeouts + rate limiter | AI |
-| 3.5 | `/api/transform`; Regenerate path | AI |
-| 3.6 | Engine badge with fallback notice; transform actions wired; tone menu | FE |
-| 3.7 | Tests with mocked `LanguageModel` (AI SDK test models): fallback order, no fallback after first delta, error codes, secret-leak scan | AI |
-| 3.8 | Manual smoke with real keys (whichever the user configures) | LEAD |
-| 3.9 | Comparative evaluation: the 6 fixture tasks, PromptHub prompt vs raw idea on each target's own model; blind pairwise judge from a different vendor, randomized order; report win, tie and loss with n. No superiority claims before this | AI + LEAD |
-| 3.10 | Basic Mode brief heuristic (idea → `PromptBrief`) feeding the same profiles | AI |
+## Phase 3: Gemini free-tier integration
+
+Gates (all met on 2026-11-24): design selected, auth merged and reviewed, Gemini-only architecture
+documented, free-tier model eligibility verified from the official pricing page. Calls with the
+owner's real key happen only when the owner has configured it.
+
+| # | Task | Owner | Status |
+| --- | --- | --- | --- |
+| 3.1 | `server-only` guard on every module that reads secrets or calls Gemini | AI | in progress |
+| 3.2 | Gemini engine via `@ai-sdk/google` `createGoogle({apiKey})`, `maxRetries: 0`, no sampling params, thinking level configurable, no tools or grounding | AI | in progress |
+| 3.3 | Meta-prompts: clarify (structured), generate (brief → target profile), transforms (improve, shorten, expand, tone, regenerate) | AI | in progress |
+| 3.4 | Quota lease wiring: abort on disconnect, timeout, token reconcile, usage record; `quota_exhausted` with `resetsAt`, no retry, no fallback | AI | in progress |
+| 3.5 | Client: `requestId`/`workflowId`, Stop, new error states, draft kept | AI / FE | in progress |
+| 3.6 | Tone menu, AI states in the engine popover, first-use disclosure, usage remaining on `/account` | FE | in progress |
+| 3.7 | Tests with AI SDK mock models: per-target generation, transforms preserve requirements, no retry on 429, secret-leak scan | AI | in progress |
+| 3.8 | Opt-in `npm run eval:gemini` (real free-tier calls, request budget, never in CI) | AI / LEAD | in progress |
+| 3.9 | Manual smoke with the owner's key and Google OAuth credentials | LEAD + owner | waiting for credentials |
 
 ## Phase 4: History, versions, shortcuts, responsiveness
 
@@ -102,8 +113,8 @@ Critical journeys (Playwright, Chromium, desktop + 390 px):
 1. Idea → questions → answer one, skip one → generate → copy (clipboard asserted).
 2. Skip all → generate → Improve → version list shows 2 → restore v1 → 3 versions.
 3. Basic Mode (no keys): badge visible, AI actions disabled with reason, prompt generated from template.
-4. Provider failure: mocked first provider 429 → result from second, fallback notice shown.
-5. All providers fail → actionable error, previous text preserved.
+4. Gemini quota exhausted (mocked 429): clear temporary message with reset time, draft kept, Basic Mode works, no fallback.
+5. Signed out: AI actions ask for sign-in; Basic Mode works end to end.
 6. History persists across reload; rename, delete, undo, restore from Recently deleted; search + filter.
 7. Shortcuts: Ctrl/Cmd+Enter, Ctrl/Cmd+Shift+C, new prompt.
 8. Accessibility: axe scan with no serious violations; keyboard-only journey 1.
@@ -120,7 +131,7 @@ Critical journeys (Playwright, Chromium, desktop + 390 px):
 - `.env.example` final, README setup (`.env.local`), Vercel env var guide
 - Security headers + CSP, `server-only` audit, bundle check for leaked env
 - `npm run build` clean, lint/typecheck/test in CI (GitHub Actions)
-- Optional: Upstash rate-limit adapter
+- Supabase project: run the quota migration, schedule `ai_prune()`; Google OAuth redirect URLs for the production domain
 
 ## Parallelism and write-conflict rules
 

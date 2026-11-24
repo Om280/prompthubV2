@@ -1,8 +1,10 @@
 # PromptHub — Product Requirements
 
-Status: Phase 1 · Owner: lead engineer · Last updated: 2026-11-23
-Revisions: v2 adds target-specific prompt strategies (§7a) and replaces the design direction (§8, see
-`docs/DESIGN.md`).
+Status: final product · Owner: lead engineer · Last updated: 2026-11-24
+Revisions:
+- v2 added the target-specific prompt strategies (§7a).
+- v3 makes Gemini free tier the only AI provider (§7), adds Google sign-in for AI, and adopts Direction C
+  "Interlock" as the production design (§8).
 
 ## 1. Problem
 
@@ -21,7 +23,8 @@ the questions that change the result, and keeps every version so you can go back
 - **Secondary:** practitioners who already write prompts and want a fast drafting and refinement desk
   with history.
 
-The product is single-user and local-first. There are no accounts in v1; history lives in the browser.
+The product is local-first. Google sign-in is needed only for AI features; Basic Mode works signed out.
+History lives in the browser, with no cloud sync.
 
 ## 4. Core journey
 
@@ -31,6 +34,7 @@ The product is single-user and local-first. There are no accounts in v1; history
    - **Target platform:** ChatGPT, Claude or Gemini. This decides *how the prompt is written*, using a
      separate optimization profile per destination (§7a). It is **not** the model that generates it.
    - **Length:** Concise, Balanced (default) or Detailed.
+   - **Tone** (optional): Neutral, Friendly, Professional, Direct or Playful.
 3. **Clarify.** They press Generate (Ctrl/Cmd+Enter). The app asks **0–4 essential questions**, only ones
    whose answers would materially change the prompt. Each question has an optional suggested answer chip.
    The user can answer any subset, **Skip** an individual question, or **Skip all** and generate straight
@@ -78,19 +82,35 @@ the buttons they trigger, matched to the platform.
 
 ## 7. AI generation and honesty
 
-- Generation runs server-side through one provider layer for OpenAI, Anthropic and Google Gemini.
-- Keys come only from server environment variables `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` and
-  `GEMINI_API_KEY`. Nothing is exposed to the client, and no `NEXT_PUBLIC_` variable ever holds a key.
-- The app detects which providers are configured. If the preferred one fails (rate limit, outage, invalid
-  output) it falls back to the next configured provider *before any text has streamed*, and the UI says
-  which engine wrote the result.
-- **Basic Mode:** with no provider configured, the app still works through a local, deterministic
-  template engine. It is labeled "Basic Mode, no AI" everywhere it appears. It uses fixed clarifying
-  questions per detected task type and assembles the prompt from a platform-specific template. Improve,
-  Expand, Shorten and Change tone are disabled in Basic Mode, with a tooltip that says what is needed to
-  enable them. **AI output is never simulated.**
-- Errors are specific and actionable: "Anthropic is rate-limited. Retried with OpenAI." /
-  "No provider could complete this request. Try again in a minute."
+- **One provider: the Gemini API free tier.** All AI work (clarify, generate, improve, shorten, expand,
+  tone, regenerate) runs server-side through the application owner's single `GEMINI_API_KEY` from Google
+  AI Studio, in a project with no billing account. There is no OpenAI, Anthropic, OpenRouter, paid
+  Gemini model, paid tool (such as Search grounding) or fallback provider. Users never see or enter a key.
+- **Target platform ≠ generation provider.** Choosing Claude means Gemini writes a prompt using the Claude
+  profile. The UI never says ChatGPT or Claude was called.
+- **Model:** `GEMINI_MODEL` is configurable and must be on the verified free-tier allowlist
+  (`src/lib/ai/gemini-models.ts`). There is no automatic switch to any other model.
+- **Sign-in required for AI:** Google sign-in (Supabase Auth). Basic Mode stays public.
+- **Shared quota:** every user draws on one project quota, so the server enforces persistent, atomic
+  limits in Supabase (defaults, all configurable):
+  - 5 new prompt workflows per user per day
+  - 5 refinements per user per day
+  - 3 requests per minute per user and 10 per IP
+  - 1 concurrent request per user
+  - 20,000 characters of input
+  - app-wide RPM, TPM and RPD ceilings at 70% of the project's verified limits
+  
+  Retries with the same request id are never counted twice, and there is an `AI_ENABLED` emergency switch.
+- **When the free quota runs out:** a clear "temporarily unavailable, resets at …" message appears. The
+  draft is kept, Basic Mode stays available, and nothing retries in a loop or falls back to a paid model.
+- **Basic Mode:** the local, deterministic template engine. It is labeled "Basic Mode, no AI" everywhere
+  it appears. It uses fixed clarifying questions per detected task type and assembles the prompt from a
+  platform-specific template. AI-only actions are shown as "Needs AI", with the reason. **AI output is
+  never simulated**, and a Basic Mode prompt is never labeled as Gemini output.
+- **Privacy disclosure:** on the free tier, Google may use submitted content to improve its products. This
+  is said plainly on `/privacy` and in a first-use notice before the first AI request. The app never
+  claims zero retention or confidential processing, and it sends Gemini only the idea, answers and prompt
+  text (no name, email or ids).
 
 ## 7a. Target-specific prompt strategies
 
@@ -112,20 +132,29 @@ Research and sources: `docs/PROMPTING_RESEARCH.md`.
 - **Never emitted by default:** "think step by step", ALL-CAPS emphasis, generic personas, blanket "be
   concise", invented examples, agentic persistence boilerplate.
 - **Honest claims only.** The UI may say prompts are "structured for {platform}, following its published
-  guidance". It may not claim better results until the comparative evaluation (ROADMAP 3.9) has data.
+  guidance". It may not claim better downstream answers unless that has been tested independently
+  (`docs/PROMPTING_RESEARCH.md` §10).
 
 ## 8. Design direction
 
-The approved direction is **"Spruce and brass"**, specified in full in `docs/DESIGN.md`. In summary:
-- A dark-first spruce workspace, with one centered column and no cards.
-- One typeface, Mona Sans, whose width axis carries the hierarchy.
-- A single brass accent, used for the primary action, the caret and focus.
-- **The memorable element:** the idea is typed straight onto the page as a large headline, then becomes
-  the prompt's title.
-- Copy confirms in place, with a label swap and a brief wash over the copied text.
-- On mobile, a bottom action bar holds Generate, then Refine, Tone and Copy.
+The approved production direction (2026-11-24) is **Direction C, "Interlock"**, specified in
+`docs/design/DIRECTION-C.md`. In summary:
+- **A prompt is a build.** The prompt is shown as connected, labelled blocks (role and task, context,
+  requirements, constraints, output) that snap together as the prompt is written. A Plain text view is
+  also available.
+- **Four planes:** a cool Fog canvas, white Paper sheets, raised controls on inset tracks, and one
+  Graphite plane for history and the command palette. Light by default, with a dark theme.
+- **Type:** Funnel Display for the idea, titles and block labels; Schibsted Grotesk for text.
+- **Colour:** cobalt for the one primary action and focus. Each platform has its own colour (Raspberry
+  for ChatGPT, Lagoon for Claude, Ochre for Gemini), which tints the blocks. These are never the
+  vendors' brand colours.
+- **Moments:** the question stepper with progress, the piece-by-piece build while generating, and the
+  copy "charge" down the block spine.
+- **Navigation:** Ctrl/⌘ K command palette; graphite history panel (bottom sheet below 900 px); a
+  floating action bar with a Refine sheet on mobile.
 
-The earlier blue-graphite manuscript concept was not approved and is retired.
+"Spruce and brass" (`docs/DESIGN.md`) and Directions A and B are retired. The explorations are archived
+at the git tag `design-explorations-v1`.
 
 **Interaction additions from the design pass:**
 - Stop (Esc) while streaming
@@ -143,14 +172,23 @@ A stopped stream keeps its text as a version marked partial.
 - **Responsive:** 360 px to 1920 px. Below 900 px the history rail becomes an overlay sheet.
 - **Performance:** LCP < 2 s on a fast connection; first token typically < 2 s after the provider
   responds; no layout shift while streaming.
-- **Security:** keys server-only; input length caps (idea ≤ 4,000 chars, prompt ≤ 20,000); Zod
-  validation on every route; best-effort per-IP rate limit on API routes.
-- **Privacy:** no analytics in v1; prompts leave the device only for the selected AI request.
+- **Security:**
+  - Secrets (`GEMINI_API_KEY`, `SUPABASE_SECRET_KEY`) are server-only and never logged.
+  - Every AI route verifies the user with `getClaims()` and never trusts a user id from the browser.
+  - Zod validation on every route.
+  - Input caps (idea ≤ 4,000 characters; ≤ 20,000 characters in total per AI request).
+  - Persistent, atomic AI quotas, with a best-effort per-IP limit on the public Basic Mode routes.
+- **Privacy:**
+  - No analytics in v1.
+  - Prompt history stays in the browser (IndexedDB), with no cloud sync.
+  - The server stores AI usage metadata only (tokens, operation, model, status, duration), never prompt
+    text.
+  - Free-tier data use is disclosed (§7).
 
 ## 10. Out of scope for v1
 
-Accounts and sync, sharing links, team libraries, running the prompt against a model and showing the
-answer, user-supplied API keys in the browser, prompt marketplaces.
+Cloud history sync, sharing links, team libraries, running the prompt against a model and showing the
+answer, user-supplied API keys, paid AI tiers, prompt marketplaces.
 
 Candidate later features: **API export**, which would show the same prompt as an OpenAI
 developer-message, Anthropic system-prompt or Gemini system-instruction payload, kept separate from the
@@ -168,9 +206,9 @@ consumer prompt.
 | --- | --- |
 | Default target | ChatGPT |
 | Default length | Balanced |
-| Provider preference order | Anthropic → OpenAI → Gemini (configurable with `PROVIDER_ORDER`) |
+| AI provider | Gemini API free tier only; `GEMINI_MODEL` from the allowlist (recommended `gemini-3.8-flash`, verified free and stable on 2026-11-24) |
 | Max clarifying questions | 4 |
 | Trash retention | 30 days |
-| Theme | Dark default, light theme available; system preference respected on first visit |
+| Theme | Follows the system preference; light (Design C's default) and dark themes are both available |
 | Package manager | npm |
 | Deployment | Vercel (Node runtime for API routes) |
