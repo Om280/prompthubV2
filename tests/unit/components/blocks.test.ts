@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Length, TargetPlatform } from "@/lib/contracts";
 import { renderPrompt } from "@/lib/prompting";
-import { MOCK_BRIEFS } from "@/lib/mock/briefs";
-import { chunkText } from "@/lib/mock/adapter";
+import { chunkText, MOCK_BRIEFS } from "../fixtures/briefs";
 import { joinBlocks, parseBlocks, withBody, type Block } from "@/components/workspace/blocks";
 import { FIXTURES } from "../prompting/fixtures";
 

@@ -7,6 +7,7 @@ import type { HistoryStore } from "@/lib/history/types";
 import type { SessionActions, SessionState } from "@/hooks/use-session";
 import type { KeyLabels } from "@/hooks/use-media";
 import type { EditorView } from "@/hooks/use-editor-view";
+import type { AiState, EnginePreference } from "./ai";
 
 export type CopyVia = "pointer" | "keyboard";
 
@@ -29,10 +30,13 @@ export interface WorkspaceValue {
   /** GET /api/providers failed; the indicator offers "Check again". */
   aiStatusFailed: boolean;
   reloadAiStatus: () => void;
-  /** True when the AI status says the app runs in Basic Mode. */
+  /** True when AI-only actions are off: AI isn't on for this visitor (see `aiState`). */
   basic: boolean;
-  /** True only when the dev `?preview=` mock client is active ("Preview data"). */
-  preview: boolean;
+  /** Whether AI is on, chosen off, or why it can't run. */
+  aiState: AiState;
+  /** "auto" uses Gemini when AI is ready; "basic" keeps everything in Basic Mode (per browser). */
+  enginePref: EnginePreference;
+  setEnginePref: (p: EnginePreference) => void;
   state: SessionState;
   actions: SessionActions;
   keys: KeyLabels;

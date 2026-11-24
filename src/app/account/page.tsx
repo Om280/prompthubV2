@@ -5,7 +5,12 @@ import { connection } from "next/server";
 import { Suspense } from "react";
 import { AccountDetails } from "@/components/auth/account-details";
 import { PageShell } from "@/components/auth/page-shell";
+import type { AiStatusResponse } from "@/lib/contracts";
+import { budgetExhaustedUntil } from "@/lib/ai/budget-state";
+import { aiReadinessChecked, aiStatusResponse } from "@/lib/ai/status";
 import { getVerifiedUser } from "@/lib/server/auth";
+import { readServerEnv } from "@/lib/server/env";
+import { readMyUsage } from "@/lib/server/usage";
 
 export const metadata: Metadata = {
   title: "Account settings, PromptHub",
@@ -40,7 +45,29 @@ async function VerifiedAccount() {
   await connection();
   const user = await getVerifiedUser();
   if (!user) redirect("/?signin=required");
-  return <AccountDetails user={user} />;
+  return <AccountDetails user={user} ai={await accountAiStatus()} />;
+}
+
+/**
+ * AI status for this account, with today's usage read through the user's own session (RLS; never
+ * the secret key). Null when it can't be worked out; the page says so instead of guessing.
+ */
+async function accountAiStatus(): Promise<AiStatusResponse | null> {
+  try {
+    const env = readServerEnv();
+    const readiness = await aiReadinessChecked({ env });
+    const usage = readiness.status === "ready" ? ((await readMyUsage(env)) ?? undefined) : undefined;
+    return aiStatusResponse({
+      authConfigured: true,
+      signedIn: true,
+      readiness,
+      env,
+      budgetExhaustedUntil: budgetExhaustedUntil(),
+      usage,
+    });
+  } catch {
+    return null;
+  }
 }
 
 function AccountSkeleton() {

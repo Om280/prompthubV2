@@ -1,4 +1,4 @@
-import { expect, type Locator, type Page } from "@playwright/test";
+import { expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 
 export const IDEA_LABEL = "Describe what you want the AI to do";
 const MOD = process.platform === "darwin" ? "Meta" : "Control";
@@ -91,4 +91,40 @@ export async function historyRowAction(page: Page, title: RegExp, action: "Renam
   await row.hover();
   await row.getByRole("button", { name: /^More actions for/ }).click();
   await page.getByRole("menuitem", { name: action }).click();
+}
+
+/* ---------------------------------------------------------------- AI (fake Gemini, fake Supabase) */
+
+export const FAKE_GEMINI_URL = `http://127.0.0.1:${Number(process.env.FAKE_GEMINI_PORT ?? 54398)}`;
+export const FAKE_SUPABASE = `http://127.0.0.1:${Number(process.env.FAKE_SUPABASE_PORT ?? 54399)}`;
+
+/** Resets both fakes: sign-ins, quota counters and Gemini failure injections. */
+export async function resetFakes(request: APIRequestContext) {
+  for (const url of [`${FAKE_SUPABASE}/__test/reset`, `${FAKE_GEMINI_URL}/__test/reset`]) {
+    expect((await request.post(url)).ok()).toBe(true);
+  }
+}
+
+/** The next `count` Gemini calls fail: "429" (quota), "503", "midstream" (connection drops) or "truncate". */
+export async function failGemini(request: APIRequestContext, mode: "429" | "503" | "midstream" | "truncate", count = 1) {
+  expect((await request.post(`${FAKE_GEMINI_URL}/__test/fail`, { data: { mode, count } })).ok()).toBe(true);
+}
+
+/** Sets today's AI count for a test user (e.g. to reach the daily limit). */
+export async function setDailyUsage(request: APIRequestContext, user: "ada" | "bob", kind: "workflows" | "refinements", used: number) {
+  expect((await request.post(`${FAKE_SUPABASE}/__test/daily`, { data: { user, kind, used } })).ok()).toBe(true);
+}
+
+/** Skips the first-use AI notice (tests that aren't about it). */
+export async function preAcceptAiNotice(page: Page) {
+  await page.addInitScript(() => localStorage.setItem("prompthub-ai-disclosure", "accepted"));
+}
+
+/** Google sign-in through the fake Supabase Auth; ends on the workspace with AI ready. */
+export async function signInAs(page: Page, request: APIRequestContext, user: "ada" | "bob" = "ada") {
+  expect((await request.post(`${FAKE_SUPABASE}/__test/next-sign-in`, { data: { user } })).ok()).toBe(true);
+  await page.goto("/");
+  await page.getByTestId("sign-in").click();
+  await expect(page.getByTestId("account-button")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("engine-indicator")).toHaveAttribute("data-engine", "ai", { timeout: 15_000 });
 }

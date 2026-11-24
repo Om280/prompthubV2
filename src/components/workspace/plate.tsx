@@ -1,10 +1,9 @@
 "use client";
 
-import { RotateCcw } from "lucide-react";
 import { motion } from "motion/react";
-import { TARGET_LABELS, type ApiErrorCode, type TargetPlatform } from "@/lib/contracts";
-import { Button } from "@/components/ui/button";
+import { TARGET_LABELS, type TargetPlatform } from "@/lib/contracts";
 import { useReducedMotion } from "@/hooks/use-media";
+import { ErrorStrip } from "./error-strip";
 import { useFirstEntrance } from "./composer";
 import { useWorkspace } from "./workspace-context";
 
@@ -90,14 +89,10 @@ export function GhostPlate() {
   );
 }
 
-/** `ai_required` can't succeed on retry; the action needs a provider first. */
-export const canRetry = (code?: ApiErrorCode) => code !== "ai_required";
-
 /** Nothing was written yet and the request failed: say what happened and offer the retry. */
 export function ErrorSheet() {
-  const { state, actions } = useWorkspace();
+  const { state } = useWorkspace();
   if (state.phase !== "error" || !state.error || state.versions.length > 0) return null;
-  const retry = canRetry(state.error.code);
   return (
     <section className="ih-sheet" aria-labelledby="error-title">
       <div className="ih-sheet-head">
@@ -106,15 +101,7 @@ export function ErrorSheet() {
         </h2>
       </div>
       <div className="ih-sheet-body">
-        <div className="ih-strip" data-tone="danger" role="alert">
-          <span>{state.error.message}</span>
-        </div>
-        {retry && (
-          <Button variant="primary" onClick={actions.retry}>
-            <RotateCcw size={15} aria-hidden />
-            Try again
-          </Button>
-        )}
+        <ErrorStrip error={state.error} prominent />
       </div>
     </section>
   );

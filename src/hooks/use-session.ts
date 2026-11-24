@@ -545,12 +545,16 @@ export function useSession(
             terminal = true;
             const s = ref.current;
             const dropped = ev.error.code === "internal" && ev.error.message === DROPPED_MESSAGE;
+            // A stream that fails after text arrived keeps that text as a partial version, so
+            // nothing the user already saw disappears.
+            const arrived = !!s.stream?.text.trim();
             dispatch({
               type: "streamError",
               message: ev.error.message || GENERIC_ERROR,
               code: ev.error.code,
               resetsAt: ev.error.resetsAt,
-              keepPartial: dropped ? { id: newId(), promptId: s.promptId ?? newId(), now: Date.now() } : undefined,
+              keepPartial:
+                dropped || arrived ? { id: newId(), promptId: s.promptId ?? newId(), now: Date.now() } : undefined,
             });
             if (ev.error.code === "ai_required") cb.current.onAiRequired?.();
           }

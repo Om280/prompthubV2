@@ -13,14 +13,22 @@
  * Test controls (not part of Supabase):
  *   POST /__test/next-sign-in   { user: "ada" | "bob", accessTtlSec?: number }
  *   POST /__test/revoke         { user }   revoke every refresh token of a user
- *   POST /__test/reset
+ *   POST /__test/reset          also clears the quota store
+ *   POST /__test/daily          { user, kind: "workflows" | "refinements", used }  set today's count
+ *   GET  /__test/usage?user=ada today's counts (what ai_my_usage_today returns for that user)
  *   GET  /__test/health
+ *
+ * Quota functions (quota.mjs, same signatures as migrations 0001/0002):
+ *   POST /rest/v1/rpc/ai_consume | ai_adjust | ai_acquire_inflight | ai_release_inflight |
+ *        ai_record_usage | ai_prune      service key only (anon and users are refused)
+ *   POST /rest/v1/rpc/ai_my_usage_today  a signed-in user's own JWT only; answers for that user
  *
  * Start: `node tests/e2e/fake-supabase/server.mjs` (port from FAKE_SUPABASE_PORT, default 54399).
  */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import http from "node:http";
 import { exportJWK, generateKeyPair, jwtVerify, SignJWT, createLocalJWKSet } from "jose";
+import { createQuota } from "./quota.mjs";
 import { USERS } from "./users.mjs";
 
 const PORT = Number(process.env.FAKE_SUPABASE_PORT ?? 54399);
@@ -40,7 +48,12 @@ const codes = new Map();
 /** refresh token → { userKey, sessionId, ttl, revoked } */
 const refreshTokens = new Map();
 
+const quota = createQuota();
+/** The fake service key (SUPABASE_SECRET_KEY in the e2e env). Privileged quota RPCs require it. */
+const SECRET_PREFIX = "sb_secret_";
+
 function reset() {
+  quota.reset();
   nextSignIn = { user: "ada", accessTtlSec: DEFAULT_TTL };
   codes.clear();
   refreshTokens.clear();
@@ -160,6 +173,37 @@ const server = http.createServer(async (req, res) => {
       for (const r of refreshTokens.values()) if (r.userKey === body.user) r.revoked = true;
       if (process.env.FAKE_SUPABASE_DEBUG) console.log("revoke", body.user, refreshTokens.size);
       return send(res, 200, { ok: true });
+    }
+
+    if (path === "/__test/daily" && req.method === "POST") {
+      const body = await readJson(req);
+      const u = USERS[body.user];
+      if (!u || !["workflows", "refinements"].includes(body.kind)) return send(res, 400, { error: "bad request" });
+      quota.setDaily(u.id, body.kind, body.used);
+      return send(res, 200, { ok: true });
+    }
+    if (path === "/__test/usage" && req.method === "GET") {
+      const u = USERS[url.searchParams.get("user") ?? ""];
+      if (!u) return send(res, 400, { error: "unknown user" });
+      return send(res, 200, quota.myUsageToday(u.id)[0]);
+    }
+
+    const rpc = /^\/rest\/v1\/rpc\/([a-z_]+)$/.exec(path);
+    if (rpc && req.method === "POST") {
+      const fn = rpc[1];
+      const args = await readJson(req);
+      const pgError = (status, code, message) => send(res, status, { code, message, details: null, hint: null });
+      if (fn === "ai_my_usage_today") {
+        // security invoker + RLS: only an authenticated user, and only their own rows.
+        const claims = await verifyBearer(req);
+        if (!claims?.sub) return pgError(401, "42501", "permission denied for function ai_my_usage_today");
+        return send(res, 200, quota.myUsageToday(claims.sub));
+      }
+      if (!Object.hasOwn(quota.fns, fn)) return pgError(404, "PGRST202", `Could not find the function public.${fn}`);
+      const apikey = String(req.headers.apikey ?? "");
+      if (!apikey.startsWith(SECRET_PREFIX)) return pgError(401, "42501", `permission denied for function ${fn}`);
+      const result = quota.fns[fn](args);
+      return result === null ? send(res, 204) : send(res, 200, result);
     }
 
     if (path === "/auth/v1/.well-known/jwks.json") return send(res, 200, { keys: [publicJwk] });

@@ -9,17 +9,11 @@ import type {
 } from "@/lib/contracts";
 
 /**
- * The client-side API surface the UI talks to.
- * Phase 1 ships `mockClient` (src/lib/mock/adapter.ts); Phase 2 adds `api.ts` with the same shape,
- * backed by fetch + the NDJSON reader. The UI never imports either directly, only this interface
- * through `ClientProvider`.
+ * The client-side API surface the UI talks to: `createApiClient` (api.ts), over same-origin fetch and
+ * the NDJSON reader. Tests may pass any object with this shape.
  */
 export interface PromptHubClient {
-  /**
-   * "mock" while generation is not connected. The UI shows the "Preview data" indicator for it and
-   * never labels its output as written by an AI provider.
-   */
-  readonly kind: "mock" | "api";
+  readonly kind: "api";
   /** GET /api/providers: AI availability and auth status. */
   getAiStatus(): Promise<AiStatusResponse>;
   clarify(req: ClarifyRequest, signal?: AbortSignal): Promise<ClarifyResponse>;

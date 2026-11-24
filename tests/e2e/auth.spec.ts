@@ -107,11 +107,14 @@ test("the session persists across reloads and new pages", async ({ page, request
   await second.close();
 });
 
-test("protected API: signed in, /api/transform answers 409 ai_required (not 401)", async ({ page, request }) => {
+test("protected API: signed in, /api/transform passes the auth check (streams, not 401)", async ({ page, request }) => {
   await signIn(page, request, "ada");
-  const t = await page.request.post("/api/transform", { data: IMPROVE });
-  expect(t.status()).toBe(409);
-  expect((await t.json()).error.code).toBe("ai_required");
+  // AI runs against the fake Gemini server in e2e, so a signed-in transform streams a result.
+  const t = await page.request.post("/api/transform", { data: { ...IMPROVE, requestId: crypto.randomUUID() } });
+  expect(t.status()).toBe(200);
+  expect(t.headers()["content-type"]).toContain("application/x-ndjson");
+  const events = (await t.text()).trim().split("\n").map((l) => JSON.parse(l));
+  expect(events[0]).toMatchObject({ type: "meta", engine: { kind: "ai", provider: "gemini", model: "gemini-3.8-flash" } });
   const status = await (await page.request.get("/api/providers")).json();
   expect(status.auth).toEqual({ configured: true, signedIn: true });
 });

@@ -1,17 +1,13 @@
 "use client";
 
 import { AnimatePresence, motion, MotionConfig } from "motion/react";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { AiStatusResponse } from "@/lib/contracts";
 import type { PromptHubClient } from "@/lib/client/types";
 import type { HistoryStore } from "@/lib/history/types";
 import { createApiClient } from "@/lib/client/api";
 import { createBrowserStore } from "@/lib/history/browser-store";
-import { createMemoryStore } from "@/lib/history/memory-store";
-import { createMockClient } from "@/lib/mock/adapter";
-import { buildHistorySeed } from "@/lib/mock/history-seed";
-import { buildPreviewSession, readPreview, type PreviewConfig } from "@/lib/mock/preview";
 import { AccountButton } from "@/components/auth/account-button";
 import { AuthProvider, useAuth } from "@/components/auth/auth-context";
 import { SignInCard } from "@/components/auth/sign-in-card";
@@ -23,10 +19,20 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useEditorView } from "@/hooks/use-editor-view";
 import { useIsDesktopRail, useIsMobile, useIsWide, useKeyLabels, useReducedMotion } from "@/hooks/use-media";
-import { initialSession, latest, useSession, type SessionState } from "@/hooks/use-session";
+import { latest, useSession, type SessionState } from "@/hooks/use-session";
 import { keys as match, useShortcuts } from "@/hooks/use-shortcuts";
-import { applyTheme, useSystemThemeSync } from "@/hooks/use-theme";
+import { useSystemThemeSync } from "@/hooks/use-theme";
 import { isMacPlatform, wordCount } from "@/lib/utils";
+import {
+  aiState as aiStateOf,
+  readAiConsent,
+  readEnginePreference,
+  STATUS_STALE_CODES,
+  writeAiConsent,
+  writeEnginePreference,
+  type EnginePreference,
+} from "./ai";
+import { AiDisclosure } from "./ai-disclosure";
 import { BriefColumn, BriefCompact } from "./brief";
 import { CommandPalette } from "./command-palette";
 import { Composer } from "./composer";
@@ -45,27 +51,17 @@ import {
   type WorkspaceValue,
 } from "./workspace-context";
 
-const noopSubscribe = () => () => {};
 const DRAWER = [0.32, 0.72, 0, 1] as const;
 const COPIED_MS = 2400;
 
-/**
- * Client root. Reads the dev-only `?preview=` config after hydration and remounts the workspace
- * with it, so production renders exactly one default tree.
- */
+/** Client root: the real API client and IndexedDB history. */
 export function Workspace() {
-  const search = useSyncExternalStore(
-    noopSubscribe,
-    () => window.location.search,
-    () => null,
-  );
-  const config = useMemo(() => (search === null ? null : readPreview(search)), [search]);
   useSystemThemeSync();
   return (
     <MotionConfig reducedMotion="user">
       <TooltipProvider>
         <AuthProvider>
-          <WorkspaceInner key={config ? `preview-${search}` : "default"} config={config} />
+          <WorkspaceInner />
         </AuthProvider>
         <Toaster />
       </TooltipProvider>
@@ -76,30 +72,11 @@ export function Workspace() {
 interface Env {
   client: PromptHubClient;
   history: HistoryStore;
-  initial: SessionState;
 }
 
-/**
- * Default tree: the real API client and IndexedDB history (opened lazily on first use, never during
- * server render). The mock client and seeded history exist only behind the dev `?preview=<state>`
- * parameter; `history`, `theme` and `storage` alone apply to the real app.
- */
-function createEnv(config: PreviewConfig | null): Env {
-  if (!config?.state) {
-    return {
-      client: createApiClient(),
-      history: config?.storageOff ? createMemoryStore({}, { persistent: false }) : createBrowserStore(),
-      initial: initialSession(),
-    };
-  }
-  const client = createMockClient({ mode: config.state === "basic" ? "basic" : "ai" });
-  // Preview configs only exist after hydration (client-side), so building eagerly is safe.
-  const seed = config.state === "history-empty" ? { prompts: [], versions: [] } : buildHistorySeed(Date.now());
-  return {
-    client,
-    history: createMemoryStore(seed, { persistent: !config.storageOff }),
-    initial: buildPreviewSession(config, seed) ?? initialSession(),
-  };
+/** History opens lazily on first use, never during server render. */
+function createEnv(): Env {
+  return { client: createApiClient(), history: createBrowserStore() };
 }
 
 function textToCopy(s: SessionState): string {
@@ -146,13 +123,16 @@ function runCharge(sheet: HTMLElement | null, reduced: boolean) {
 
 type Shape = "single" | "compose-split" | "work-split" | "docked";
 
-function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
-  const [env] = useState(() => createEnv(config));
+function WorkspaceInner() {
+  const [env] = useState(createEnv);
   const { client, history } = env;
   const [aiStatus, setAiStatus] = useState<AiStatusResponse | null>(null);
   const [aiStatusFailed, setAiStatusFailed] = useState(false);
   const authStatus = useAuth().state.status;
-  const [railOpen, setRailOpenState] = useState(config?.historyOpen ?? false);
+  // The visitor's engine choice, per browser. Read after mount (storage isn't there on the server).
+  const [enginePref, setEnginePrefState] = useState<EnginePreference>("auto");
+  const [disclosure, setDisclosure] = useState<{ run: () => void; basic: () => void } | null>(null);
+  const [railOpen, setRailOpenState] = useState(false);
   const [railAnimated, setRailAnimated] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -196,7 +176,7 @@ function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
     void fetchAiStatus();
   }, [fetchAiStatus]);
 
-  const { state, actions } = useSession(
+  const { state, actions: sessionActions } = useSession(
     client,
     history,
     {
@@ -205,13 +185,72 @@ function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
       onPersistError: () => toast("Couldn't save this version to history. It stays open here."),
       onStreamStart: (activity, tone) => announce(activity === "generate" ? "Writing" : activityLabel(activity, tone)),
     },
-    () => env.initial,
   );
 
-  // Theme override from the preview param (not persisted).
+  const setEnginePref = useCallback(
+    (p: EnginePreference) => {
+      writeEnginePreference(p);
+      client.setEnginePreference?.(p);
+      setEnginePrefState(p);
+    },
+    [client],
+  );
+  // First-use AI notice: before the first request that would go to Gemini, show what is sent and
+  // where, with Continue or Basic Mode. The choice is remembered per browser.
+  const ai = aiStateOf(aiStatus, enginePref);
+  const usingAi = ai === "on";
+  const gate = useCallback(
+    (needsAi: boolean, run: () => void, basicRun?: () => void) => {
+      if (!needsAi || readAiConsent()) return run();
+      setDisclosure({
+        run: () => {
+          writeAiConsent();
+          run();
+        },
+        basic: () => {
+          setEnginePref("basic");
+          basicRun?.();
+        },
+      });
+    },
+    [setEnginePref],
+  );
+  const actions = useMemo(() => {
+    const a = sessionActions;
+    /** Whether the primary action (Generate / continue) would send a request right now. */
+    const primarySends = () => {
+      const s = a.getState();
+      if (s.phase === "idle") return s.idea.trim().length > 0;
+      if (s.phase === "answering") return true;
+      const g = s.generated;
+      if ((s.phase === "ready" || s.phase === "error") && g) {
+        return !!s.idea.trim() && (s.idea.trim() !== g.idea || s.target !== g.target || s.length !== g.length);
+      }
+      return s.phase === "error" && s.error?.retry === "clarify";
+    };
+    return {
+      ...a,
+      primary: () => gate(usingAi && primarySends(), a.primary, a.primary),
+      skipAll: () => gate(usingAi, a.skipAll, a.skipAll),
+      regenerate: () => gate(usingAi, a.regenerate, a.regenerate),
+      transform: (action: Parameters<typeof a.transform>[0], tone?: Parameters<typeof a.transform>[1]) =>
+        gate(true, () => a.transform(action, tone)),
+      retry: () => {
+        const r = a.getState().error?.retry;
+        const transform = r !== undefined && r !== "clarify" && r !== "generate" && r !== "regenerate";
+        gate(transform || usingAi, a.retry, transform ? undefined : a.retry);
+      },
+    };
+  }, [sessionActions, gate, usingAi]);
+
+  // Apply the saved choice once on mount; the client asks for Basic Mode from then on if chosen.
   useEffect(() => {
-    if (config?.theme) applyTheme(config.theme, false);
-  }, [config?.theme]);
+    const saved = readEnginePreference();
+    client.setEnginePreference?.(saved);
+    // Storage is read after mount so the server render and hydration agree.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (saved !== "auto") setEnginePrefState(saved);
+  }, [client]);
 
   // Fetched once per mount, when sign-in state settles or changes, and after an unexpected
   // ai_required answer.
@@ -219,6 +258,12 @@ function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
     if (authStatus === "loading") return;
     void fetchAiStatus();
   }, [fetchAiStatus, authStatus]);
+
+  // A limit, sign-in or availability error means the status shown is out of date: check again.
+  const errorCode = state.error?.code;
+  useEffect(() => {
+    if (errorCode && STATUS_STALE_CODES.has(errorCode)) void fetchAiStatus();
+  }, [errorCode, fetchAiStatus]);
 
   // Desktop only: the composer has focus on load.
   useEffect(() => {
@@ -384,7 +429,8 @@ function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
   const docked = split && railOpen;
   const shape: Shape = docked ? "docked" : compose && split ? "compose-split" : !compose && wide ? "work-split" : "single";
   const enginePlacement: EnginePlacement = !mobile ? "topbar" : compose ? "composer" : hasOutput ? "sheet" : "brief";
-  const basic = aiStatus?.mode === "basic";
+  /** AI-only actions (Improve, Shorten, Expand, Tone) are off: AI isn't on for this visitor. */
+  const basic = !usingAi;
 
   const value: WorkspaceValue = {
     client,
@@ -393,7 +439,9 @@ function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
     aiStatusFailed,
     reloadAiStatus: loadAiStatus,
     basic,
-    preview: client.kind === "mock",
+    aiState: ai,
+    enginePref,
+    setEnginePref,
     state,
     actions,
     keys: keyLabels,
@@ -500,6 +548,20 @@ function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
 
         {mobile && <MobileBar />}
         <CommandPalette />
+        <AiDisclosure
+          open={disclosure !== null}
+          onContinue={() => {
+            const d = disclosure;
+            setDisclosure(null);
+            d?.run();
+          }}
+          onBasic={() => {
+            const d = disclosure;
+            setDisclosure(null);
+            d?.basic();
+          }}
+          onDismiss={() => setDisclosure(null)}
+        />
         <ShortcutSheet />
         <div className="ih-sr" aria-live="polite" aria-atomic="true">
           {liveMessage}

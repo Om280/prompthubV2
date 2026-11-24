@@ -1,6 +1,5 @@
-import { TARGET_LABELS, TONE_LABELS, type Engine, type Tone, type VersionRecord } from "@/lib/contracts";
+import { TARGET_LABELS, TONE_LABELS, type Engine, type TargetPlatform, type Tone, type VersionRecord } from "@/lib/contracts";
 import type { Activity, SessionState } from "@/hooks/use-session";
-import { engineLabel } from "@/lib/utils";
 
 /** Version names (DESIGN §8). */
 export function versionLabel(v: VersionRecord): string {
@@ -36,31 +35,28 @@ export function activityLabel(a: Activity, tone?: Tone): string {
 }
 
 /**
- * Who wrote the text. With the mock client nothing is attributed to an AI provider:
- * the engine reads "preview data" instead.
+ * Who wrote the text: Basic Mode, or Gemini with its model id. Never the target platform: a prompt
+ * written for Claude was still written by Gemini (or Basic Mode), and ChatGPT and Claude are never called.
  */
-export function engineName(engine: Engine | { kind: "manual" } | null | undefined, preview: boolean): string {
-  if (engine?.kind === "basic") return "Basic Mode, no AI";
-  if (preview) return "preview data";
-  return engineLabel(engine);
+export function engineName(engine: Engine | { kind: "manual" } | null | undefined): string {
+  if (!engine) return "";
+  if (engine.kind === "basic") return "Basic Mode, no AI";
+  if (engine.kind === "manual") return "you";
+  return `Gemini (${engine.model})`;
 }
 
-export function writingLabel(state: SessionState, preview: boolean): string {
+export function writingLabel(state: SessionState): string {
   const s = state.stream;
   if (!s) return "";
-  if (s.activity === "generate") {
-    const e = s.engine;
-    if (!e && !preview) return "Writing";
-    return `Writing with ${engineName(e, preview)}`;
-  }
+  if (s.activity === "generate") return s.engine ? `Writing with ${engineName(s.engine)}` : "Writing";
   return activityLabel(s.activity, s.tone);
 }
 
-export function provenance(engine: Engine | { kind: "manual" } | undefined, preview: boolean): string {
-  if (!engine) return "";
+/** "Built with Basic Mode, no AI" or "Written by Gemini (gemini-3.8-flash) for Claude". */
+export function provenance(engine: Engine | { kind: "manual" } | undefined, target: TargetPlatform): string {
+  if (!engine || engine.kind === "manual") return "";
   if (engine.kind === "basic") return "Built with Basic Mode, no AI";
-  if (preview) return "Sample text from preview data, not AI";
-  return `Written by ${engineLabel(engine)}`;
+  return `Written by ${engineName(engine)} for ${TARGET_LABELS[target]}`;
 }
 
 export const TARGET_TIPS = {
@@ -85,7 +81,8 @@ export const REFINE_DESCRIPTIONS = {
 export const SAME_PROMPT_NOTE =
   "Same idea and settings give the same prompt in Basic Mode. Change the platform, length or idea to get a different one.";
 
+/** The generic reason AI-only actions are off (the specific one comes from `aiBlockReason`). */
 export const BASIC_REASON =
-  "Improve, Shorten, Expand and Tone need AI, which is coming in a later update. Basic Mode still works, and your prompt is kept.";
+  "Improve, Shorten, Expand and Tone need AI. Basic Mode still works, and your prompt is kept.";
 
 export { TARGET_LABELS };

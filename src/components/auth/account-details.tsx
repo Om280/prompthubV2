@@ -4,9 +4,10 @@ import { LogOut } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import type { AuthUser } from "@/lib/contracts";
+import type { AiStatusResponse, AuthUser, UsageCount } from "@/lib/contracts";
 import { Button } from "@/components/ui/button";
 import { signOut } from "@/lib/client/auth";
+import { resetLabel } from "@/components/workspace/ai";
 import { Avatar } from "./account-button";
 
 /**
@@ -14,7 +15,7 @@ import { Avatar } from "./account-button";
  * renders it and runs Sign out. The AI section is text only: there is no usage data or key entry
  * yet, so nothing here shows numbers or a field.
  */
-export function AccountDetails({ user }: { user: AuthUser }) {
+export function AccountDetails({ user, ai }: { user: AuthUser; ai: AiStatusResponse | null }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,20 +52,18 @@ export function AccountDetails({ user }: { user: AuthUser }) {
         </p>
       </section>
 
-      <section className="ih-prose-section">
-        <h2>AI features</h2>
+      <section className="ih-prose-section" aria-labelledby="ai-heading">
+        <h2 id="ai-heading">AI features</h2>
         <p>
-          AI features will use Google Gemini on its free tier, with daily limits per account. On the free tier, Google
-          may use the text you send to improve its products, so don&apos;t include personal or sensitive information.
-          Basic Mode never sends anything to Google.
-        </p>
-        <p>
-          AI is coming in a later update. Until then, PromptHub runs in Basic Mode.{" "}
+          AI features use Google Gemini on its free tier, with daily limits per account. On the free tier, Google may
+          use the text you send to improve its products, so don&apos;t include personal or sensitive information. Basic
+          Mode never sends anything to Google.{" "}
           <Link href="/privacy" className="ih-link">
             Read the privacy notice
           </Link>
           .
         </p>
+        <AiUsage ai={ai} />
       </section>
 
       <section className="ih-prose-section">
@@ -85,6 +84,61 @@ export function AccountDetails({ user }: { user: AuthUser }) {
           </p>
         )}
       </section>
+    </div>
+  );
+}
+
+/** One allowance as a meter: "3 of 20 used". */
+function Meter({ label, count }: { label: string; count: UsageCount }) {
+  const pct = Math.min(100, Math.round((count.used / count.limit) * 100));
+  return (
+    <div className="ih-meter">
+      <div className="ih-meter-head">
+        <span>{label}</span>
+        <span className="ih-meter-count" data-testid={`usage-${label.toLowerCase().replace(/\s+/g, "-")}`}>
+          {count.used} of {count.limit} used
+        </span>
+      </div>
+      <div
+        className="ih-meter-track"
+        role="meter"
+        aria-label={label}
+        aria-valuemin={0}
+        aria-valuemax={count.limit}
+        aria-valuenow={count.used}
+        aria-valuetext={`${count.used} of ${count.limit} used`}
+      >
+        <span style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+/** Today's allowance, read from the user's own usage rows; a plain note when it can't be read. */
+function AiUsage({ ai }: { ai: AiStatusResponse | null }) {
+  if (!ai) return <p className="ih-hint">AI status couldn&apos;t be checked right now. Basic Mode still works.</p>;
+  const ready = ai.ai.status === "ready" || ai.ai.status === "quota-exhausted";
+  const at = ai.usage ? resetLabel(ai.usage.resetsAt) : null;
+  return (
+    <div className="ih-usage" data-testid="account-usage">
+      <h3>Today</h3>
+      {!ready ? (
+        <p>{ai.ai.message}</p>
+      ) : ai.usage ? (
+        <>
+          <Meter label="Prompt workflows" count={ai.usage.workflows} />
+          <Meter label="Refinements" count={ai.usage.refinements} />
+          <p className="ih-hint">
+            A workflow is one new prompt (its questions and its first version). Refinements are Improve, Shorten,
+            Expand, Tone and Regenerate.{at ? ` Both reset ${at}, your time.` : ""}
+          </p>
+        </>
+      ) : (
+        <p data-testid="usage-unavailable">
+          Today&apos;s usage couldn&apos;t be read right now. Your daily limits still apply, and Basic Mode always works.
+        </p>
+      )}
+      {ai.ai.limits && <p className="ih-hint">{ai.ai.limits.description}</p>}
     </div>
   );
 }

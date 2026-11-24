@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { tokenizeAnatomy, type TintKind } from "@/components/workspace/anatomy";
 import { renderPrompt } from "@/lib/prompting";
-import { MOCK_BRIEFS } from "@/lib/mock/briefs";
+import { MOCK_BRIEFS } from "../fixtures/briefs";
 
 const kinds = (text: string, kind: TintKind) =>
   tokenizeAnatomy(text)
