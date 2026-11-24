@@ -7,9 +7,14 @@ Source of truth: `docs/PRD.md`, `docs/ARCHITECTURE.md`, `docs/API_CONTRACTS.md`,
 ## Rules
 - File ownership is exclusive (ARCHITECTURE §3). Agents write only their paths; shared files
   (`package.json`, configs, `src/lib/contracts/**`, docs) are lead-only.
-- API keys are server-only (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`). Never `NEXT_PUBLIC_`.
-- Never fake AI output. Basic Mode is the labeled template engine, used only when no provider is configured.
-- Target platform (ChatGPT/Claude/Gemini, how the prompt is written) ≠ generation provider (who writes it).
+- AI is **Gemini free tier only**, through the owner's server-only `GEMINI_API_KEY`. No OpenAI, Anthropic,
+  OpenRouter, paid Gemini models, paid tools or fallback providers. Never link billing or enable paid
+  usage without the owner's explicit approval. `GEMINI_MODEL` must be on the verified free-tier allowlist.
+- Secrets are server-only (`GEMINI_API_KEY`, `SUPABASE_SECRET_KEY`). Never `NEXT_PUBLIC_`. Never log them.
+- Every AI route requires a verified user (`getClaims()`) and the persistent quota guard. Basic Mode stays public.
+- Never fake AI output. Basic Mode is the labeled template engine.
+- Target platform (ChatGPT/Claude/Gemini, how the prompt is written) ≠ generation provider (always Gemini).
+  Never claim ChatGPT or Claude APIs were called.
 - No placeholder buttons; every control works as labeled.
 - Verify SDK APIs against current official docs, not memory.
 
