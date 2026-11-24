@@ -1,12 +1,12 @@
 import { expect, test } from "@playwright/test";
 import { clickGenerate, editor, enterIdea, generateFromIdea, openApp, showPlainText } from "./helpers";
 
-test("11a. no AI in this build → Basic Mode is explained, never presented as AI", async ({ page, request }) => {
+test("11a. signed out → Basic Mode is explained, never presented as AI", async ({ page, request }) => {
   const res = await request.get("/api/providers");
   expect(res.ok()).toBe(true);
   const body = await res.json();
-  // No Gemini settings in the e2e environment: AI reads "not configured" (never a fallback).
-  expect(body).toMatchObject({ mode: "basic", ai: { provider: "gemini", tier: "free", status: "not-configured" } });
+  // AI (the fake Gemini) is set up in e2e, but a signed-out visitor gets Basic Mode, never AI.
+  expect(body).toMatchObject({ mode: "basic", ai: { provider: "gemini", tier: "free", status: "sign-in-required" } });
   // The message may name the missing setting, but never contains a key value.
   expect(JSON.stringify(body)).not.toMatch(/AIza|sb_secret/);
 

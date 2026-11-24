@@ -5,10 +5,9 @@ import { useState } from "react";
 import { TONE_LABELS } from "@/lib/contracts";
 import { Button } from "@/components/ui/button";
 import { BottomSheet } from "@/components/ui/sheet";
-import { BASIC_REASON } from "./labels";
 import { CopyButton } from "./copy-button";
 import { LengthSegment, regenerateLabel } from "./settings-row";
-import { AI_ACTIONS, BLOCK_REASONS, TONES, currentTone, explain, isActive, refineBlock, SheetNotices } from "./toolbar";
+import { AI_ACTIONS, AiUnlock, TONES, currentTone, explain, isActive, refineBlock, SheetNotices, useBlockReason } from "./toolbar";
 import { VersionSwitcher } from "./version-switcher";
 import { useWorkspace } from "./workspace-context";
 
@@ -48,6 +47,7 @@ export function MobileBar() {
 
 function RefineSheet({ onDone }: { onDone: () => void }) {
   const { state, actions, basic } = useWorkspace();
+  const reason = useBlockReason();
   const toneBlock = refineBlock(state, basic, "tone");
   const regen = refineBlock(state, basic, "regenerate");
   return (
@@ -66,7 +66,7 @@ function RefineSheet({ onDone }: { onDone: () => void }) {
               key={action}
               variant={block === "basic" ? "needsAi" : "secondary"}
               aria-disabled={block ? true : undefined}
-              onDisabledClick={block ? () => explain(block) : undefined}
+              onDisabledClick={block ? () => explain(reason(block), block) : undefined}
               onClick={() => {
                 onDone();
                 if (action !== "regenerate") actions.transform(action);
@@ -84,7 +84,7 @@ function RefineSheet({ onDone }: { onDone: () => void }) {
           );
         })}
         {toneBlock === "basic" ? (
-          <Button variant="needsAi" aria-disabled onDisabledClick={() => explain("basic")}>
+          <Button variant="needsAi" aria-disabled onDisabledClick={() => explain(reason("basic"), "basic")}>
             <Lock size={14} aria-hidden />
             Tone
           </Button>
@@ -103,7 +103,7 @@ function RefineSheet({ onDone }: { onDone: () => void }) {
                   aria-checked={currentTone(state) === t}
                   aria-disabled={toneBlock ? true : undefined}
                   onClick={() => {
-                    if (toneBlock) return explain(toneBlock);
+                    if (toneBlock) return explain(reason(toneBlock), toneBlock);
                     onDone();
                     actions.transform("tone", t);
                   }}
@@ -112,13 +112,13 @@ function RefineSheet({ onDone }: { onDone: () => void }) {
                 </button>
               ))}
             </div>
-            {toneBlock && <p className="ih-hint">{BLOCK_REASONS[toneBlock]}</p>}
+            {toneBlock && <p className="ih-hint">{reason(toneBlock)}</p>}
           </div>
         )}
         <Button
           variant="secondary"
           aria-disabled={regen ? true : undefined}
-          onDisabledClick={regen ? () => explain(regen) : undefined}
+          onDisabledClick={regen ? () => explain(reason(regen), regen) : undefined}
           onClick={() => {
             onDone();
             actions.regenerate();
@@ -128,7 +128,12 @@ function RefineSheet({ onDone }: { onDone: () => void }) {
           {regenerateLabel(state) ?? "Regenerate"}
         </Button>
       </div>
-      {basic && <p className="ih-hint">{BASIC_REASON}</p>}
+      {basic && (
+        <div className="grid gap-2 justify-items-start">
+          <p className="ih-hint">{reason("basic")}</p>
+          <AiUnlock size="md" />
+        </div>
+      )}
       <div className="flex flex-wrap">
         <SheetNotices />
       </div>

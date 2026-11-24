@@ -1,6 +1,17 @@
 "use client";
 
-import { ChevronDown, LoaderCircle, Lock, Maximize2, Minimize2, PenLine, RotateCcw, type LucideIcon } from "lucide-react";
+import {
+  ChevronDown,
+  LoaderCircle,
+  Lock,
+  LogIn,
+  Maximize2,
+  Minimize2,
+  PenLine,
+  RotateCcw,
+  Sparkle,
+  type LucideIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 import { TONE_LABELS, schemas, type Tone } from "@/lib/contracts";
 import { Button } from "@/components/ui/button";
@@ -8,6 +19,8 @@ import { Menu, MenuContent, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@
 import { Tip } from "@/components/ui/tooltip";
 import { latest, type Activity, type SessionState } from "@/hooks/use-session";
 import { MAX_PROMPT_CHARS } from "./editor";
+import { useAuth } from "@/components/auth/auth-context";
+import { aiBlockReason } from "./ai";
 import { BASIC_REASON, SAME_PROMPT_NOTE } from "./labels";
 import { useWorkspace } from "./workspace-context";
 
@@ -54,9 +67,38 @@ export function isActive(state: SessionState, action: Activity) {
   return state.stream?.activity === action;
 }
 
+/** The reason for a block, specific to why AI is off when that is the reason. */
+export function useBlockReason(): (block: RefineBlock) => string {
+  const { aiState, aiStatus } = useWorkspace();
+  return (block) => (block === "basic" ? aiBlockReason(aiState, aiStatus) || BASIC_REASON : BLOCK_REASONS[block]);
+}
+
 /** A Needs AI click explains itself instead of doing nothing. */
-export function explain(block: RefineBlock) {
-  toast(BLOCK_REASONS[block], { id: `refine-${block}` });
+export function explain(reason: string, block: RefineBlock) {
+  toast(reason, { id: `refine-${block}` });
+}
+
+/** The one thing that turns AI on from here, when there is one: sign in, or switch back to Gemini. */
+export function AiUnlock({ size = "sm" }: { size?: "sm" | "md" }) {
+  const { aiState, setEnginePref } = useWorkspace();
+  const auth = useAuth();
+  if (aiState === "sign-in-required" && auth.state.status === "signed-out") {
+    return (
+      <Button variant="secondary" size={size === "sm" ? "sm" : undefined} onClick={auth.signIn}>
+        <LogIn size={15} aria-hidden />
+        Sign in to use AI
+      </Button>
+    );
+  }
+  if (aiState === "chosen-basic") {
+    return (
+      <Button variant="secondary" size={size === "sm" ? "sm" : undefined} onClick={() => setEnginePref("auto")}>
+        <Sparkle size={14} aria-hidden />
+        Use Gemini
+      </Button>
+    );
+  }
+  return null;
 }
 
 /**
@@ -66,6 +108,7 @@ export function explain(block: RefineBlock) {
  */
 export function RefineBar() {
   const { state, actions, basic } = useWorkspace();
+  const reason = useBlockReason();
   const regen = refineBlock(state, basic, "regenerate");
   return (
     <div className="ih-sheet-foot" role="group" aria-label="Refine" aria-describedby={basic ? "basic-reason" : undefined}>
@@ -89,9 +132,12 @@ export function RefineBar() {
         </Button>
       </div>
       {basic && (
-        <p className="ih-reason" id="basic-reason">
-          {BASIC_REASON}
-        </p>
+        <div className="ih-reason-row">
+          <p className="ih-reason" id="basic-reason">
+            {reason("basic")}
+          </p>
+          <AiUnlock />
+        </div>
       )}
       <SheetNotices />
     </div>
@@ -100,6 +146,7 @@ export function RefineBar() {
 
 function RefineButton({ action, label, icon: Icon }: { action: RefineAction; label: string; icon: LucideIcon }) {
   const { state, actions, basic } = useWorkspace();
+  const reason = useBlockReason();
   const block = refineBlock(state, basic, action);
   const run = () => (action === "regenerate" ? actions.regenerate() : actions.transform(action));
   const button = (
@@ -107,7 +154,7 @@ function RefineButton({ action, label, icon: Icon }: { action: RefineAction; lab
       variant={block === "basic" ? "needsAi" : "secondary"}
       size="sm"
       aria-disabled={block ? true : undefined}
-      onDisabledClick={block ? () => explain(block) : undefined}
+      onDisabledClick={block ? () => explain(reason(block), block) : undefined}
       onClick={run}
     >
       {block === "basic" ? (
@@ -121,12 +168,13 @@ function RefineButton({ action, label, icon: Icon }: { action: RefineAction; lab
     </Button>
   );
   if (!block || block === "basic") return button;
-  return <Tip label={BLOCK_REASONS[block]}>{button}</Tip>;
+  return <Tip label={reason(block)}>{button}</Tip>;
 }
 
 /** Tone: a menu of the contract's tones when AI can run; otherwise disabled with the reason. */
 export function ToneMenu() {
   const { state, actions, basic } = useWorkspace();
+  const reason = useBlockReason();
   const block = refineBlock(state, basic, "tone");
   const spinning = isActive(state, "tone");
   const trigger = (
@@ -134,7 +182,7 @@ export function ToneMenu() {
       variant={block === "basic" ? "needsAi" : "secondary"}
       size="sm"
       aria-disabled={block ? true : undefined}
-      onDisabledClick={block ? () => explain(block) : undefined}
+      onDisabledClick={block ? () => explain(reason(block), block) : undefined}
     >
       {block === "basic" ? (
         <Lock size={13} aria-hidden />
@@ -146,7 +194,7 @@ export function ToneMenu() {
     </Button>
   );
   if (block === "basic") return trigger;
-  if (block) return <Tip label={BLOCK_REASONS[block]}>{trigger}</Tip>;
+  if (block) return <Tip label={reason(block)}>{trigger}</Tip>;
   return (
     <Menu>
       <MenuTrigger asChild>{trigger}</MenuTrigger>

@@ -2,9 +2,9 @@ import type { ClarifyingQuestion } from "@/lib/contracts";
 import type { PromptBrief } from "@/lib/prompting";
 
 /**
- * Sample briefs for the Phase 1 preview. Six are copied from tests/unit/prompting/fixtures.ts
- * (the analysis CSV is trimmed); "landlord" and "sql" match the composer's "Try one" examples.
- * Each carries the follow-up questions the preview asks and keywords used to pick it.
+ * Sample briefs for unit tests (block parser, anatomy tint). Six are copied from
+ * tests/unit/prompting/fixtures.ts (the analysis CSV is trimmed); "landlord" and "sql" match the
+ * composer's "Try one" examples. Test data only: nothing in the app imports this file.
  */
 export interface MockBrief {
   key: string;
@@ -313,4 +313,21 @@ export function pickBrief(idea: string): MockBrief {
 
 export function briefByKey(key: string): MockBrief {
   return MOCK_BRIEFS.find((b) => b.key === key) ?? MOCK_BRIEFS[0];
+}
+
+/** Splits text into stream-sized chunks (deterministic), like a model streaming tokens. */
+export function chunkText(text: string, seed = 7): string[] {
+  const out: string[] = [];
+  let i = 0;
+  let s = seed;
+  while (i < text.length) {
+    s = (s * 9301 + 49297) % 233280;
+    const size = 8 + Math.floor((s / 233280) * 22);
+    let end = Math.min(text.length, i + size);
+    const space = text.indexOf(" ", end);
+    if (space !== -1 && space - end < 8) end = space + 1;
+    out.push(text.slice(i, end));
+    i = end;
+  }
+  return out;
 }

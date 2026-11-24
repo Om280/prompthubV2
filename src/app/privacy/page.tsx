@@ -37,7 +37,7 @@ export default function PrivacyPage() {
 
         <h2>When you use AI, your text is sent to Google</h2>
         <p>
-          AI features (coming in a later update) send your idea, your answers and your prompt text to Google&apos;s Gemini
+          AI features send your idea, your answers and your prompt text to Google&apos;s Gemini
           API to write or rewrite the prompt. PromptHub uses Gemini&apos;s <strong>free tier</strong>.
           On the free tier, Google states that submitted content is used to improve its products (&ldquo;Content used to
           improve our products&rdquo;). See{" "}

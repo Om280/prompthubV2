@@ -15,7 +15,7 @@ import { useWorkspace } from "./workspace-context";
  * phone action bar's "2 of 2" (its accessible name stays "Version 2 of 2").
  */
 export function VersionSwitcher({ compact = false }: { compact?: boolean }) {
-  const { state, actions, keys, preview } = useWorkspace();
+  const { state, actions, keys } = useWorkspace();
   const [open, setOpen] = useState(false);
   const now = useNow();
   const total = state.versions.length;
@@ -71,7 +71,7 @@ export function VersionSwitcher({ compact = false }: { compact?: boolean }) {
                         {versionLabel(v)}, {relativeLong(v.createdAt, now)}
                       </span>
                       <span className="ih-menu-item-desc">
-                        {v.engine.kind === "manual" ? "Edited by you" : engineName(v.engine, preview)}
+                        {v.engine.kind === "manual" ? "Edited by you" : engineName(v.engine)}
                       </span>
                     </span>
                     {i === index && <Check size={15} className="ih-menu-check" aria-hidden />}

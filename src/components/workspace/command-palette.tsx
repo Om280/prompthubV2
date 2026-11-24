@@ -5,6 +5,7 @@ import {
   FileText,
   History,
   Keyboard,
+  LogIn,
   Monitor,
   Moon,
   Plus,
@@ -12,6 +13,7 @@ import {
   Ruler,
   Search,
   Sparkle,
+  Square,
   Sun,
   type LucideIcon,
 } from "lucide-react";
@@ -20,6 +22,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { LENGTH_LABELS, TARGET_LABELS, type TargetPlatform } from "@/lib/contracts";
 import { Kbd } from "@/components/ui/kbd";
 import { PLATFORMS } from "@/components/ui/segment";
+import { useAuth } from "@/components/auth/auth-context";
 import { useHistoryLists } from "@/hooks/use-history";
 import { useTheme } from "@/hooks/use-theme";
 import { LENGTHS, regenerateLabel } from "./settings-row";
@@ -60,6 +63,8 @@ function PaletteBody({ close }: { close: () => void }) {
   const w = useWorkspace();
   const { state, actions, keys, history, railOpen, setRailOpen, copyText, copyPrompt, newPrompt, setShortcutsOpen } = w;
   const { theme, preference, setPreference } = useTheme();
+  const { aiState, setEnginePref } = w;
+  const auth = useAuth();
   const lists = useHistoryLists(history);
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
@@ -104,6 +109,12 @@ function PaletteBody({ close }: { close: () => void }) {
           keywords: "length",
           run: () => actions.dispatch({ type: "setLength", length: l }),
         });
+    if (aiState === "on")
+      out.push({ id: "engine-basic", group: "Actions", icon: Square, label: "Use Basic Mode", keywords: "engine ai gemini off local", run: () => setEnginePref("basic") });
+    if (aiState === "chosen-basic")
+      out.push({ id: "engine-ai", group: "Actions", icon: Sparkle, label: "Use Gemini", keywords: "engine ai on", run: () => setEnginePref("auto") });
+    if (aiState === "sign-in-required" && auth.state.status === "signed-out")
+      out.push({ id: "sign-in", group: "Actions", icon: LogIn, label: "Sign in with Google to use AI", keywords: "account login gemini", run: auth.signIn });
     out.push({
       id: "theme",
       group: "Actions",
@@ -127,7 +138,7 @@ function PaletteBody({ close }: { close: () => void }) {
         run: () => void actions.load(p.id),
       });
     return out;
-  }, [state, actions, keys, copyText, copyPrompt, newPrompt, railOpen, setRailOpen, theme, preference, setPreference, setShortcutsOpen, lists.active]);
+  }, [state, actions, keys, copyText, copyPrompt, newPrompt, railOpen, setRailOpen, theme, preference, setPreference, setShortcutsOpen, lists.active, aiState, setEnginePref, auth]);
 
   const needle = q.trim().toLowerCase();
   const list = useMemo(() => {

@@ -4,6 +4,12 @@ const PORT = Number(process.env.E2E_PORT ?? 3300);
 const BASE_URL = `http://localhost:${PORT}`;
 const FAKE_SUPABASE_PORT = Number(process.env.FAKE_SUPABASE_PORT ?? 54399);
 const FAKE_SUPABASE_URL = `http://127.0.0.1:${FAKE_SUPABASE_PORT}`;
+const FAKE_GEMINI_PORT = Number(process.env.FAKE_GEMINI_PORT ?? 54398);
+const FAKE_GEMINI_URL = `http://127.0.0.1:${FAKE_GEMINI_PORT}`;
+
+/** Daily AI allowances for the e2e user, kept low so the limit path is reachable (tests reset them). */
+export const E2E_DAILY_WORKFLOWS = 6;
+export const E2E_DAILY_REFINEMENTS = 12;
 
 /**
  * End-to-end tests run against a production build (`next build && next start`), so dev-only
@@ -11,7 +17,12 @@ const FAKE_SUPABASE_URL = `http://127.0.0.1:${FAKE_SUPABASE_PORT}`;
  *
  * Auth runs against a local fake of Supabase Auth (tests/e2e/fake-supabase), never a real project:
  * the app is built with NEXT_PUBLIC_SUPABASE_URL pointing at it (NEXT_PUBLIC_ values are inlined at
- * build time). There are no AI keys anywhere, so the app runs in Basic Mode.
+ * build time).
+ *
+ * AI runs against a local fake of the Gemini API (tests/e2e/fake-gemini), never Google: the server
+ * gets a fake key and GEMINI_BASE_URL pointing at the fake (the provider accepts that override for
+ * loopback hosts only). The quota functions are faked by the fake Supabase server. Signed out, the
+ * app runs in Basic Mode; signed in, Gemini (fake) is ready.
  */
 export default defineConfig({
   testDir: "tests/e2e",
@@ -46,6 +57,13 @@ export default defineConfig({
   ],
   webServer: [
     {
+      command: "node tests/e2e/fake-gemini/server.mjs",
+      url: `${FAKE_GEMINI_URL}/__test/health`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
+      env: { FAKE_GEMINI_PORT: String(FAKE_GEMINI_PORT) },
+    },
+    {
       command: "node tests/e2e/fake-supabase/server.mjs",
       url: `${FAKE_SUPABASE_URL}/__test/health`,
       reuseExistingServer: !process.env.CI,
@@ -64,6 +82,19 @@ export default defineConfig({
         // The suite runs every journey from one IP and one test user; production keeps 30 and 20.
         RATE_LIMIT_PER_MINUTE: "600",
         RATE_LIMIT_PER_USER_PER_MINUTE: "600",
+        // AI against the fake Gemini server. Placeholders, not real keys.
+        GEMINI_API_KEY: "e2e-fake-gemini-key-not-real",
+        GEMINI_MODEL: "gemini-3.8-flash",
+        GEMINI_BASE_URL: `${FAKE_GEMINI_URL}/v1beta`,
+        SUPABASE_SECRET_KEY: "sb_secret_e2e_fake_not_a_real_key",
+        AI_ENABLED: "true",
+        AI_GLOBAL_RPM: "1000",
+        AI_GLOBAL_TPM: "10000000",
+        AI_GLOBAL_RPD: "100000",
+        AI_USER_PER_MINUTE: "600",
+        AI_IP_PER_MINUTE: "600",
+        AI_USER_DAILY_WORKFLOWS: String(E2E_DAILY_WORKFLOWS),
+        AI_USER_DAILY_REFINEMENTS: String(E2E_DAILY_REFINEMENTS),
       },
     },
   ],

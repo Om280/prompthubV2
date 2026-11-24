@@ -15,7 +15,7 @@ import { CopyButton } from "./copy-button";
 import { MAX_PROMPT_CHARS, PlainEditor } from "./editor";
 import { EngineIndicator } from "./engine-indicator";
 import { engineName, provenance, TARGET_TIPS, versionLabel, writingLabel } from "./labels";
-import { canRetry } from "./plate";
+import { ErrorStrip } from "./error-strip";
 import { RefineBar } from "./toolbar";
 import { VersionSwitcher } from "./version-switcher";
 import { useWorkspace } from "./workspace-context";
@@ -28,7 +28,7 @@ const EASE = [0.23, 1, 0.32, 1] as const;
  * and "result".
  */
 export function PromptSheet() {
-  const { state, actions, view, setView, mobile, preview, sheetRef, copy, writtenFor, enginePlacement } = useWorkspace();
+  const { state, actions, view, setView, mobile, sheetRef, copy, writtenFor, enginePlacement } = useWorkspace();
   const reduced = useReducedMotion();
   const stream = state.stream;
   const hasVersions = state.versions.length > 0;
@@ -60,9 +60,9 @@ export function PromptSheet() {
   // Basic Mode hands over the whole text at once; the build that follows is still presenting it.
   const lastEngine = state.versions[state.versions.length - 1]?.engine;
   const status = stream
-    ? writingLabel(state, preview)
+    ? writingLabel(state)
     : building && lastEngine && lastEngine.kind !== "manual"
-      ? `Writing with ${engineName(lastEngine, preview)}`
+      ? `Writing with ${engineName(lastEngine)}`
       : "Placing the blocks";
 
   const tooLong = !readOnly && text.length > MAX_PROMPT_CHARS;
@@ -161,17 +161,7 @@ export function PromptSheet() {
       </div>
 
       <div className="ih-sheet-body">
-        {error && (
-          <div className="ih-strip" data-tone="danger" role="alert">
-            <span>{error.message}</span>
-            {canRetry(error.code) && (
-              <Button variant="secondary" size="sm" onClick={actions.retry}>
-                <RotateCcw size={14} aria-hidden />
-                Try again
-              </Button>
-            )}
-          </div>
-        )}
+        {error && <ErrorStrip error={error} />}
         {viewingVersion && state.viewing !== null && (
           <div className="ih-strip">
             <span>
@@ -210,7 +200,7 @@ export function PromptSheet() {
 
 /** "Built with Basic Mode, no AI   Saved as version 3   170 words   Uses Markdown sections…". */
 function Provenance({ text }: { text: string }) {
-  const { state, preview, writtenFor } = useWorkspace();
+  const { state, writtenFor } = useWorkspace();
   const now = useNow();
   const shown = state.viewing !== null ? state.versions.slice(0, state.viewing + 1) : state.versions;
   const author = [...shown].reverse().find((v) => v.engine.kind !== "manual");
@@ -219,7 +209,7 @@ function Provenance({ text }: { text: string }) {
   const saved = state.notice?.kind === "saved" ? state.notice.version : null;
   return (
     <p className="ih-provenance">
-      {author && <b>{provenance(author.engine as Exclude<typeof author.engine, { kind: "manual" }>, preview)}</b>}
+      {author && <b>{provenance(author.engine, writtenFor)}</b>}
       {saved !== null ? (
         <span role="status">Saved as version {saved}</span>
       ) : (
