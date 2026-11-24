@@ -1,5 +1,5 @@
 /**
- * Prompt anatomy tint (DESIGN §6.5). Splits prompt text into colored runs without changing a
+ * Prompt anatomy tint for the Plain text view. Splits prompt text into colored runs without changing a
  * single character, so the tint layer lines up exactly with the textarea above it.
  * Invariant: tokens.map(t => t.text).join("") === input.
  */
@@ -61,11 +61,12 @@ export function tokenizeAnatomy(input: string): TintToken[] {
   return out;
 }
 
+/** Plain text view colours (interlock.css): tags in the platform shade, placeholders in cobalt. */
 export const TINT_CLASS: Record<TintKind, string> = {
-  text: "text-fg",
-  tag: "text-tag",
-  "heading-marker": "text-fg-subtle",
-  heading: "text-fg-strong",
-  marker: "text-fg-subtle",
-  placeholder: "text-accent",
+  text: "",
+  tag: "ih-tint-tag",
+  "heading-marker": "ih-tint-marker",
+  heading: "ih-tint-heading",
+  marker: "ih-tint-marker",
+  placeholder: "ih-tint-placeholder",
 };

@@ -1,9 +1,11 @@
 "use client";
 
-import type { CSSProperties } from "react";
 import { Toaster as Sonner } from "sonner";
 
-/** Sonner styled with design tokens (DESIGN §6.10): bottom center, above the mobile bar, max 3. */
+/**
+ * Toasts on the graphite plane (DIRECTION-C §4): bottom centre, above the phone action bar, at most
+ * three. Sonner's own enter/exit is a transition, so rapid toasts retarget instead of restarting.
+ */
 export function Toaster() {
   return (
     <Sonner
@@ -13,23 +15,13 @@ export function Toaster() {
       visibleToasts={3}
       duration={4000}
       gap={8}
-      style={
-        {
-          "--normal-bg": "var(--color-surface)",
-          "--normal-text": "var(--color-fg)",
-          "--normal-border": "transparent",
-          "--border-radius": "10px",
-          "--width": "360px",
-        } as CSSProperties
-      }
       toastOptions={{
+        unstyled: true,
         classNames: {
-          toast: "!shadow-float !font-sans !type-ui !font-[450] !py-3 !px-4 !gap-3",
-          title: "!font-[450]",
-          actionButton:
-            "!bg-transparent !text-accent !type-ui !px-1.5 !h-7 hover:!text-accent-hover !ml-auto",
-          closeButton: "!bg-surface !text-fg-muted !border-border",
-          icon: "!text-success",
+          toast: "ih-toast",
+          title: "ih-toast-title",
+          actionButton: "ih-toast-action",
+          closeButton: "ih-toast-close",
         },
       }}
     />

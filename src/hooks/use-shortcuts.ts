@@ -41,6 +41,7 @@ export const keys = {
   prevVersion: (e: KeyboardEvent) => e.altKey && !e.ctrlKey && !e.metaKey && e.code === "BracketLeft",
   nextVersion: (e: KeyboardEvent) => e.altKey && !e.ctrlKey && !e.metaKey && e.code === "BracketRight",
   search: (e: KeyboardEvent) => e.key === "/" && !e.ctrlKey && !e.metaKey && !e.altKey,
+  palette: (e: KeyboardEvent, mod: boolean) => mod && !e.shiftKey && !e.altKey && e.code === "KeyK",
 };
 
 export function useShortcuts(bindings: Shortcut[], opts: { modalOpen: boolean }) {

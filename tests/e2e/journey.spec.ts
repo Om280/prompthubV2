@@ -29,7 +29,15 @@ test("1. idea entry through final prompt generation, labelled as Basic Mode", as
   await expect(skipAll.or(page.getByTestId("version-label"))).toBeVisible();
   if (await skipAll.isVisible()) await skipAll.click();
 
+  // The prompt opens as labelled blocks, one editable field per section.
+  await expect(page.getByTestId("version-label")).toHaveAccessibleName("Version 1 of 1", { timeout: 15_000 });
+  const blocks = page.getByRole("textbox", { name: / block$/ });
+  await expect(blocks.first()).toBeVisible();
+  expect(await blocks.count()).toBeGreaterThanOrEqual(2);
+  const firstBlock = await blocks.first().inputValue();
+
   const prompt = await waitForPrompt(page, "Version 1 of 1");
+  expect(prompt).toContain(firstBlock);
   expect(prompt).toMatch(/cover letter/i);
   expect(prompt).toMatch(/data analyst/i);
   await expect(page.getByText("Built with Basic Mode, no AI")).toBeVisible();

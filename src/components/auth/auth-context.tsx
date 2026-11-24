@@ -16,8 +16,21 @@ export type AuthState =
   /** The session check itself failed (network); sign-in stays available. */
   | { status: "unknown" };
 
+/**
+ * A one-shot note from the URL: a failed or cancelled sign-in (`/?auth_error=`), or a page that
+ * needs an account (`/?signin=required`). Shown as the sign-in card in the workspace.
+ */
+export interface AuthNotice {
+  kind: "error" | "signin-required";
+  message: string;
+  /** Signing in again can help (false when sign-in isn't set up on this server). */
+  canRetry: boolean;
+}
+
 export interface AuthValue {
   state: AuthState;
+  notice: AuthNotice | null;
+  dismissNotice: () => void;
   /** True between clicking "Sign in" and the browser leaving for Google. */
   signingIn: boolean;
   signingOut: boolean;
@@ -32,16 +45,17 @@ export const SIGNIN_REQUIRED_MESSAGE = "Sign in with Google to open account sett
 export const SIGNED_OUT_MESSAGE = "Signed out. History stays on this device.";
 
 /** Reads and removes the one-shot `auth_error` / `signin` query parameters. */
-function takeUrlNotice(): { error: string | null; signinRequired: boolean } {
+function takeUrlNotice(): { error: string | null; code: string | null; signinRequired: boolean } {
   const url = new URL(window.location.href);
-  const error = authErrorMessage(url.searchParams.get("auth_error"));
+  const code = url.searchParams.get("auth_error");
+  const error = authErrorMessage(code);
   const signinRequired = url.searchParams.get("signin") === "required";
   if (url.searchParams.has("auth_error") || url.searchParams.has("signin")) {
     url.searchParams.delete("auth_error");
     url.searchParams.delete("signin");
     window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
   }
-  return { error, signinRequired };
+  return { error, code, signinRequired };
 }
 
 function currentPath(): string {
@@ -57,6 +71,8 @@ export function AuthProvider({ children, onSignedOut }: { children: ReactNode; o
   const [state, setState] = useState<AuthState>({ status: "loading" });
   const [signingIn, setSigningIn] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
+  const [notice, setNotice] = useState<AuthNotice | null>(null);
+  const dismissNotice = useCallback(() => setNotice(null), []);
   const signedOutRef = useRef(onSignedOut);
   useEffect(() => {
     signedOutRef.current = onSignedOut;
@@ -79,15 +95,18 @@ export function AuthProvider({ children, onSignedOut }: { children: ReactNode; o
   );
 
   useEffect(() => {
-    const notice = takeUrlNotice();
-    if (notice.error) toast.error(notice.error, { duration: 10_000, closeButton: true });
+    // The URL is read once on mount; from then on the notice is state (dismissable, not a timed toast).
+    const fromUrl = takeUrlNotice();
     fetchSession()
       .then(
         (s) => apply(s),
         () => apply(null),
       )
       .then(() => {
-        if (notice.signinRequired) toast(SIGNIN_REQUIRED_MESSAGE);
+        if (fromUrl.error)
+          setNotice({ kind: "error", message: fromUrl.error, canRetry: fromUrl.code !== "not_configured" });
+        else if (fromUrl.signinRequired)
+          setNotice({ kind: "signin-required", message: SIGNIN_REQUIRED_MESSAGE, canRetry: true });
       });
   }, [apply]);
 
@@ -106,6 +125,7 @@ export function AuthProvider({ children, onSignedOut }: { children: ReactNode; o
       return;
     }
     setSigningIn(true);
+    setNotice(null);
     void signInWithGoogle(currentPath()).then((error) => {
       if (error) {
         setSigningIn(false);
@@ -130,9 +150,11 @@ export function AuthProvider({ children, onSignedOut }: { children: ReactNode; o
     return true;
   }, [refresh]);
 
+  // Once signed in, a stale "sign in" note has nothing left to ask for.
+  const shown = state.status === "signed-in" ? null : notice;
   const value = useMemo<AuthValue>(
-    () => ({ state, signingIn, signingOut, signIn, signOut, refresh }),
-    [state, signingIn, signingOut, signIn, signOut, refresh],
+    () => ({ state, notice: shown, dismissNotice, signingIn, signingOut, signIn, signOut, refresh }),
+    [state, shown, dismissNotice, signingIn, signingOut, signIn, signOut, refresh],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

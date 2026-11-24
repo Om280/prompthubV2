@@ -2,16 +2,20 @@
 
 import { MoreHorizontal } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import type { PromptRecord } from "@/lib/contracts";
+import { TARGET_LABELS, type PromptRecord } from "@/lib/contracts";
 import { Button } from "@/components/ui/button";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu";
-import { cn, relativeShort } from "@/lib/utils";
+import { relativeShort } from "@/lib/utils";
 
-/** One saved prompt in the rail (DESIGN §6.9). */
+/**
+ * One saved prompt (DIRECTION-C §5): title, the platform in its colour, the version count and the
+ * time. The open row gets a 4px platform spine. F2 renames, Delete deletes.
+ */
 export function HistoryRow({
   item,
   active,
   now,
+  versions,
   renaming,
   onOpen,
   onStartRename,
@@ -22,6 +26,7 @@ export function HistoryRow({
   item: PromptRecord;
   active: boolean;
   now: number;
+  versions: number | undefined;
   renaming: boolean;
   onOpen: () => void;
   onStartRename: () => void;
@@ -42,13 +47,7 @@ export function HistoryRow({
   };
 
   return (
-    <div
-      className={cn(
-        "group relative flex h-9 items-center rounded-sm coarse:h-11",
-        active ? "bg-surface-2" : "hover:bg-surface-2 focus-within:bg-surface-2",
-      )}
-    >
-      {active && <span aria-hidden className="absolute inset-y-1.5 left-0 w-0.5 rounded-xs bg-accent" />}
+    <div className="ih-row-wrap" data-active={active} data-platform-row={item.target}>
       {renaming ? (
         <RenameInput title={item.title} onRename={onRename} onCancel={onCancelRename} />
       ) : (
@@ -56,28 +55,26 @@ export function HistoryRow({
           <button
             type="button"
             data-row-button
+            className="ih-row"
             aria-current={active ? "page" : undefined}
             onClick={onOpen}
             onKeyDown={onKey}
-            className="flex h-full min-w-0 flex-1 items-center gap-3 rounded-sm pl-3 pr-10 text-left"
           >
-            <span className="min-w-0 flex-1 truncate text-[14px] leading-5 text-fg">{item.title}</span>
+            <span className="ih-row-title">{item.title}</span>
+            <span className="ih-row-meta">
+              <span className="ih-row-platform">
+                <i aria-hidden />
+                {TARGET_LABELS[item.target]}
+              </span>
+              {versions !== undefined && <span>{versions === 1 ? "1 version" : `${versions} versions`}</span>}
+              {now > 0 && <span className="ih-row-when">{relativeShort(item.updatedAt, now)}</span>}
+            </span>
           </button>
-          <span
-            aria-hidden
-            className="pointer-events-none absolute right-3 type-meta text-fg-subtle tabular-nums group-focus-within:opacity-0 fine:group-hover:opacity-0 coarse:right-12"
-          >
-            {relativeShort(item.updatedAt, now)}
-          </span>
           <Menu>
             <MenuTrigger asChild>
-              <Button
-                variant="icon"
-                aria-label={`More actions for ${item.title}`}
-                className="absolute right-1 size-7 opacity-0 group-focus-within:opacity-100 data-[state=open]:opacity-100 fine:group-hover:opacity-100 coarse:size-11 coarse:opacity-100"
-              >
-                <MoreHorizontal className="size-4" aria-hidden />
-              </Button>
+              <button type="button" className="ih-row-more" aria-label={`More actions for ${item.title}`}>
+                <MoreHorizontal size={17} aria-hidden />
+              </button>
             </MenuTrigger>
             <MenuContent
               align="end"
@@ -104,7 +101,7 @@ export function HistoryRow({
   );
 }
 
-/** Inline rename (§6.9): Enter or blur saves, Esc cancels, an empty name reverts. */
+/** Inline rename: Enter or blur saves, Esc cancels, an empty name reverts. */
 function RenameInput({
   title,
   onRename,
@@ -138,6 +135,7 @@ function RenameInput({
     <input
       ref={input}
       value={value}
+      className="ih-rename"
       aria-label="Rename prompt"
       onChange={(e) => setValue(e.target.value)}
       onKeyDown={(e) => {
@@ -151,7 +149,6 @@ function RenameInput({
         }
       }}
       onBlur={() => finish(true)}
-      className="mx-3 h-7 min-w-0 flex-1 bg-transparent text-[14px] leading-5 text-fg shadow-[inset_0_-2px_0_0_var(--color-accent)] coarse:text-base"
     />
   );
 }
@@ -166,19 +163,19 @@ export function DeletedRow({
   onPurge: () => void;
 }) {
   return (
-    <div className="group flex h-9 items-center gap-1 rounded-sm pl-3 pr-1 hover:bg-surface-2 focus-within:bg-surface-2 coarse:h-11">
-      <span className="min-w-0 flex-1 truncate text-[14px] leading-5 text-fg-muted">{item.title}</span>
-      <Button variant="accent" className="shrink-0" onClick={onRestore}>
+    <div className="ih-deleted-row">
+      <span className="ih-deleted-title">{item.title}</span>
+      <Button variant="secondary" size="sm" onClick={onRestore}>
         Restore
       </Button>
       <Menu>
         <MenuTrigger asChild>
-          <Button variant="icon" aria-label={`More actions for ${item.title}`} className="size-7 coarse:size-11">
-            <MoreHorizontal className="size-4" aria-hidden />
+          <Button size="sm" icon aria-label={`More actions for ${item.title}`}>
+            <MoreHorizontal size={17} aria-hidden />
           </Button>
         </MenuTrigger>
         <MenuContent align="end" className="min-w-[160px]">
-          <MenuItem onSelect={onPurge} className="text-danger">
+          <MenuItem onSelect={onPurge} className="ih-danger-text">
             Delete forever
           </MenuItem>
         </MenuContent>

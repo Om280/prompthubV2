@@ -9,8 +9,9 @@ import { cn } from "@/lib/utils";
 const DRAWER = [0.32, 0.72, 0, 1] as const;
 
 /**
- * Mobile bottom sheet (DESIGN §6.9, §7 #16): slides up 360 ms, closes in 260 ms, follows the
- * finger 1:1 from the handle/header and dismisses past 30% of its height or at >0.4 px/ms.
+ * Bottom sheet below 900px (DIRECTION-C §5, §12): rises in 450 ms on the drawer curve, leaves in
+ * 240 ms, follows the finger 1:1 from its handle and header, and closes past 120px or at 500px/s.
+ * Graphite for history, paper for Refine.
  */
 export function BottomSheet({
   open,
@@ -18,8 +19,8 @@ export function BottomSheet({
   title,
   headerRight,
   children,
+  tone = "graphite",
   tall = false,
-  description,
   titleHidden = false,
 }: {
   open: boolean;
@@ -27,8 +28,8 @@ export function BottomSheet({
   title: string;
   headerRight?: ReactNode;
   children: ReactNode;
+  tone?: "graphite" | "paper";
   tall?: boolean;
-  description?: string;
   titleHidden?: boolean;
 }) {
   const reduced = useReducedMotion();
@@ -36,20 +37,19 @@ export function BottomSheet({
   const sheetRef = useRef<HTMLDivElement>(null);
 
   const onDragEnd = (_: unknown, info: PanInfo) => {
-    const h = sheetRef.current?.offsetHeight ?? 600;
-    if (info.offset.y > h * 0.3 || info.velocity.y > 400) onOpenChange(false);
+    if (info.offset.y > 120 || info.velocity.y > 500) onOpenChange(false);
   };
 
   const slide = reduced
     ? {
         initial: { opacity: 0 },
         animate: { opacity: 1, transition: { duration: 0.2 } },
-        exit: { opacity: 0, transition: { duration: 0.2 } },
+        exit: { opacity: 0, transition: { duration: 0.16 } },
       }
     : {
         initial: { y: "100%" },
-        animate: { y: 0, transition: { duration: 0.36, ease: DRAWER } },
-        exit: { y: "100%", transition: { duration: 0.26, ease: DRAWER } },
+        animate: { y: 0, transition: { duration: 0.45, ease: DRAWER } },
+        exit: { y: "100%", transition: { duration: 0.24, ease: DRAWER } },
       };
 
   return (
@@ -59,16 +59,16 @@ export function BottomSheet({
           <Dialog.Portal forceMount>
             <Dialog.Overlay asChild forceMount>
               <motion.div
-                className="fixed inset-0 z-40 bg-scrim"
+                className="ih-scrim"
                 initial={{ opacity: 0 }}
-                animate={{ opacity: 1, transition: { duration: reduced ? 0.2 : 0.36 } }}
-                exit={{ opacity: 0, transition: { duration: reduced ? 0.2 : 0.26 } }}
+                animate={{ opacity: 1, transition: { duration: reduced ? 0.2 : 0.3 } }}
+                exit={{ opacity: 0, transition: { duration: 0.2 } }}
               />
             </Dialog.Overlay>
             <Dialog.Content
               asChild
               forceMount
-              {...(description ? {} : { "aria-describedby": undefined })}
+              aria-describedby={undefined}
               onOpenAutoFocus={(e) => {
                 // Focus the sheet itself so no control shows a ring after a tap.
                 e.preventDefault();
@@ -83,26 +83,27 @@ export function BottomSheet({
                 dragControls={controls}
                 dragListener={false}
                 dragConstraints={{ top: 0, bottom: 0 }}
-                dragElastic={{ top: 0, bottom: 1 }}
+                dragElastic={{ top: 0.05, bottom: 0.9 }}
                 dragMomentum={false}
                 onDragEnd={onDragEnd}
-                className={cn(
-                  "fixed inset-x-0 bottom-0 z-50 flex flex-col rounded-t-lg bg-surface text-fg shadow-float outline-none",
-                  tall ? "h-[92dvh]" : "max-h-[92dvh]",
-                )}
+                className={cn("ih-bsheet", tone === "graphite" && "ih-on-graphite")}
+                data-tone={tone}
+                data-tall={tall}
               >
-                <div
-                  className="shrink-0 cursor-grab touch-none select-none px-4 pt-2 active:cursor-grabbing"
-                  onPointerDown={(e) => controls.start(e)}
-                >
-                  <div className="mx-auto h-1 w-9 rounded-full bg-border-control" aria-hidden />
-                  <div className={cn("flex min-h-12 items-center justify-between gap-3", titleHidden && "min-h-4")}>
-                    <Dialog.Title className={cn("type-ui text-fg", titleHidden && "sr-only")}>{title}</Dialog.Title>
+                <div className="ih-bsheet-grab" onPointerDown={(e) => controls.start(e)}>
+                  <div className="ih-handle" aria-hidden>
+                    <i />
+                  </div>
+                  <div className="ih-bsheet-head">
+                    <Dialog.Title
+                      className={cn(tone === "graphite" ? "ih-history-title" : "ih-sheet-title", titleHidden && "ih-sr")}
+                    >
+                      {title}
+                    </Dialog.Title>
                     {headerRight}
                   </div>
-                  {description && <Dialog.Description className="sr-only">{description}</Dialog.Description>}
                 </div>
-                <div className="safe-bottom min-h-0 flex-1 overflow-y-auto overscroll-contain px-4">{children}</div>
+                <div className="ih-bsheet-body">{children}</div>
               </motion.div>
             </Dialog.Content>
           </Dialog.Portal>
@@ -112,7 +113,7 @@ export function BottomSheet({
   );
 }
 
-/** Centered dialog used by the shortcut sheet (§6.10, §7 #19). */
+/** Centred dialog (keyboard shortcuts). Opened from the keyboard, so it appears without motion. */
 export function CenterDialog({
   open,
   onOpenChange,
@@ -126,41 +127,16 @@ export function CenterDialog({
   children: ReactNode;
   footer?: ReactNode;
 }) {
-  const reduced = useReducedMotion();
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <AnimatePresence>
-        {open && (
-          <Dialog.Portal forceMount>
-            <Dialog.Overlay asChild forceMount>
-              <motion.div
-                className="fixed inset-0 z-40 bg-scrim"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1, transition: { duration: 0.2 } }}
-                exit={{ opacity: 0, transition: { duration: 0.15 } }}
-              />
-            </Dialog.Overlay>
-            <div className="pointer-events-none fixed inset-0 z-50 grid place-items-center p-4">
-              <Dialog.Content asChild forceMount aria-describedby={undefined}>
-                <motion.div
-                  initial={reduced ? { opacity: 0 } : { opacity: 0, scale: 0.98 }}
-                  animate={{ opacity: 1, scale: 1, transition: { duration: 0.2, ease: [0.23, 1, 0.32, 1] } }}
-                  exit={
-                    reduced
-                      ? { opacity: 0, transition: { duration: 0.15 } }
-                      : { opacity: 0, scale: 0.98, transition: { duration: 0.15, ease: [0.23, 1, 0.32, 1] } }
-                  }
-                  className="pointer-events-auto w-full max-w-[520px] rounded-lg bg-surface p-6 text-fg shadow-float outline-none"
-                >
-                  <Dialog.Title className="mb-4 type-ui text-fg-strong">{title}</Dialog.Title>
-                  {children}
-                  {footer}
-                </motion.div>
-              </Dialog.Content>
-            </div>
-          </Dialog.Portal>
-        )}
-      </AnimatePresence>
+      <Dialog.Portal>
+        <Dialog.Overlay className="ih-dialog-scrim" />
+        <Dialog.Content className="ih-dialog" aria-describedby={undefined}>
+          <Dialog.Title className="ih-sheet-title">{title}</Dialog.Title>
+          {children}
+          {footer}
+        </Dialog.Content>
+      </Dialog.Portal>
     </Dialog.Root>
   );
 }

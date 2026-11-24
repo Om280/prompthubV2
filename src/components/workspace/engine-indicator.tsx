@@ -1,15 +1,21 @@
 "use client";
 
+import { LogIn } from "lucide-react";
 import type { AiStatusResponse } from "@/lib/contracts";
+import { useAuth } from "@/components/auth/auth-context";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { engineLabel, cn } from "@/lib/utils";
+import { engineLabel } from "@/lib/utils";
 import { latest } from "@/hooks/use-session";
 import { useWorkspace } from "./workspace-context";
 
+/** What the indicator shows. `data-engine` keeps these values (e2e and the dev preview read it). */
 type Kind = "preview" | "ai" | "basic" | "loading" | "failed";
 
-/** What Basic Mode is (DESIGN §6.3). */
+/** Dot styles, one per AI status (interlock.css `.ih-engine-dot[data-engine]`). */
+export type EngineDotKind = Kind | Exclude<AiStatusResponse["ai"]["status"], "ready">;
+
+/** What Basic Mode is. */
 export const BASIC_MODE_EXPLANATION =
   "Prompts come from local templates that follow the platform and length you pick, so the same idea and settings always give the same prompt.";
 
@@ -25,15 +31,39 @@ export function aiPlanExplanation(status: AiStatusResponse | null): string {
   return base;
 }
 
-const BODY = "mt-2 text-[14px] leading-[21px] text-fg-muted";
+/** "at 12:00 AM" today, or "Tue at 12:00 AM", in the visitor's own time zone. */
+export function resetLabel(iso: string | undefined, now = new Date()): string | null {
+  if (!iso) return null;
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return null;
+  const time = at.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const sameDay = at.toDateString() === now.toDateString();
+  return sameDay ? `at ${time}` : `${at.toLocaleDateString(undefined, { weekday: "short" })} at ${time}`;
+}
+
+/** The status dot: hollow ring for Basic Mode, solid ink when AI is on, danger when AI can't run. */
+export function EngineDot({ kind }: { kind: EngineDotKind }) {
+  return <span className="ih-engine-dot" data-engine={kind} aria-hidden />;
+}
 
 /**
- * Header engine status (DESIGN §6.3). One button at every width: below 640px only the dot shows and
- * the label stays as its accessible name. "Preview data" appears only with the dev mock client.
+ * Engine status (DIRECTION-C §5). One instance on screen: in the top bar from 640px, and inline on
+ * phones (under the composer, or in the prompt sheet header). "Preview data" appears only with the
+ * dev mock client.
  */
-export function EngineIndicator() {
+export function EngineIndicator({
+  placement = "topbar",
+  compact = false,
+}: {
+  placement?: "topbar" | "inline";
+  /** Dot only, with the label as its name (the phone sheet header, where the provenance line says it in full). */
+  compact?: boolean;
+} = {}) {
   const { aiStatus, aiStatusFailed, reloadAiStatus, preview, basic, state } = useWorkspace();
+  const auth = useAuth();
   const kind: Kind = preview ? "preview" : aiStatus ? (basic ? "basic" : "ai") : aiStatusFailed ? "failed" : "loading";
+  const ai = aiStatus?.ai;
+  const dot: EngineDotKind = kind === "basic" && ai && ai.status !== "ready" ? ai.status : kind;
 
   // In AI mode the label names the model that wrote the current result, when there is one.
   const lastEngine = latest(state)?.engine;
@@ -49,22 +79,12 @@ export function EngineIndicator() {
             ? "Engine status unknown"
             : resultEngine
               ? engineLabel(resultEngine)
-              : aiStatus?.ai.model
-                ? engineLabel({ kind: "ai", provider: "gemini", tier: "free", model: aiStatus.ai.model })
+              : ai?.model
+                ? engineLabel({ kind: "ai", provider: "gemini", tier: "free", model: ai.model })
                 : "Gemini (free tier)";
 
-  const dot = (
-    <span
-      aria-hidden
-      className={cn(
-        "size-1.5 shrink-0 rounded-full",
-        kind === "ai" && "bg-success",
-        kind === "basic" && "shadow-[inset_0_0_0_1px_var(--color-fg-subtle)]",
-        kind === "preview" && "bg-fg-subtle",
-        (kind === "loading" || kind === "failed") && "bg-border-control",
-      )}
-    />
-  );
+  const resets = ai?.status === "quota-exhausted" ? resetLabel(ai.resetsAt) : null;
+  const canSignIn = ai?.status === "sign-in-required" && auth.state.status === "signed-out";
 
   return (
     <Popover>
@@ -73,42 +93,52 @@ export function EngineIndicator() {
           type="button"
           data-testid="engine-indicator"
           data-engine={kind}
-          className={cn(
-            "press flex h-8 items-center gap-2 rounded-sm px-2 type-meta text-fg-muted hover:bg-surface-2 hover:text-fg coarse:h-11",
-            "max-sm:w-11 max-sm:justify-center max-sm:px-0",
-          )}
+          data-ai-status={ai?.status}
+          data-placement={placement}
+          data-compact={compact || undefined}
+          aria-label={compact ? label : undefined}
+          className="ih-engine"
         >
-          {dot}
-          <span className="whitespace-nowrap max-sm:sr-only">{label}</span>
+          <EngineDot kind={dot} />
+          {!compact && <span>{label}</span>}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[320px]">
-        <p className="type-ui text-fg">{label}</p>
+      <PopoverContent align={placement === "topbar" ? "end" : "start"}>
+        <strong className="ih-popover-title">{label}</strong>
         {kind === "preview" && (
           <>
-            <p className={BODY}>This view uses sample data from the dev preview, not the server.</p>
-            <p className={BODY}>
-              Prompts here are rendered from local sample briefs, not written by AI. History lives in this tab only.
-            </p>
-            {basic && <p className={BODY}>Showing how Basic Mode looks.</p>}
+            <p>This view uses sample data from the dev preview, not the server.</p>
+            <p>Prompts here are rendered from local sample briefs, not written by AI. History lives in this tab only.</p>
+            {basic && <p>Showing how Basic Mode looks.</p>}
           </>
         )}
         {kind === "basic" && aiStatus && (
           <>
-            <p className={BODY}>{BASIC_MODE_EXPLANATION}</p>
-            <p className={BODY}>{aiPlanExplanation(aiStatus)}</p>
-            <p className={BODY}>Improve, Shorten, Expand and Tone stay off until AI is on.</p>
+            <p>{BASIC_MODE_EXPLANATION}</p>
+            {ai?.status === "sign-in-required" || ai?.status === "quota-exhausted" ? (
+              <p>{ai.message}</p>
+            ) : (
+              <p>{aiPlanExplanation(aiStatus)}</p>
+            )}
+            {resets && <p>The free daily allowance resets {resets}, your time.</p>}
+            <p>Improve, Shorten, Expand and Tone stay off until AI is on.</p>
+            {canSignIn && (
+              <Button variant="secondary" size="sm" className="mt-3" onClick={auth.signIn}>
+                <LogIn size={15} aria-hidden />
+                Sign in with Google
+              </Button>
+            )}
           </>
         )}
-        {kind === "ai" && aiStatus && <p className={BODY}>{aiStatus.ai.message}</p>}
-        {kind === "loading" && <p className={BODY}>Checking which engine is available.</p>}
+        {kind === "ai" && ai && <p>{ai.message}</p>}
+        {kind === "loading" && <p>Checking which engine is available.</p>}
         {kind === "failed" && (
           <>
-            <p className={BODY}>
+            <p>
               PromptHub couldn&apos;t reach the server to check which engine is set up. Generate still works if the
               server is up.
             </p>
-            <Button variant="accent" className="-ml-1 mt-2" onClick={reloadAiStatus}>
+            <Button variant="secondary" size="sm" className="mt-3" onClick={reloadAiStatus}>
               Check again
             </Button>
           </>

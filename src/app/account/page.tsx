@@ -4,10 +4,11 @@ import { redirect } from "next/navigation";
 import { connection } from "next/server";
 import { Suspense } from "react";
 import { AccountDetails } from "@/components/auth/account-details";
+import { PageShell } from "@/components/auth/page-shell";
 import { getVerifiedUser } from "@/lib/server/auth";
 
 export const metadata: Metadata = {
-  title: "Account settings · PromptHub",
+  title: "Account settings, PromptHub",
 };
 
 /**
@@ -18,24 +19,18 @@ export const metadata: Metadata = {
  */
 export default function AccountPage() {
   return (
-    <div className="min-h-dvh">
-      <header className="flex h-14 items-center gap-2 px-[calc(var(--gutter)-8px)]">
-        <Link href="/" className="press rounded-sm px-2 py-1 type-wordmark text-fg-strong hover:bg-surface-2">
-          PromptHub
-        </Link>
-      </header>
-      <main className="column pb-24 pt-8">
-        <h1 className="type-title text-fg-strong">Account settings</h1>
-        <Suspense fallback={<AccountSkeleton />}>
-          <VerifiedAccount />
-        </Suspense>
-      </main>
-      <footer className="column border-t border-border py-6">
-        <Link href="/privacy" className="type-meta text-fg-muted hover:text-fg">
+    <PageShell
+      title="Account settings"
+      footer={
+        <Link href="/privacy" className="ih-link">
           Privacy
         </Link>
-      </footer>
-    </div>
+      }
+    >
+      <Suspense fallback={<AccountSkeleton />}>
+        <VerifiedAccount />
+      </Suspense>
+    </PageShell>
   );
 }
 
@@ -50,10 +45,13 @@ async function VerifiedAccount() {
 
 function AccountSkeleton() {
   return (
-    <div className="mt-8 flex flex-col gap-3" aria-busy="true">
-      <span className="sr-only">Loading your account</span>
-      <div className="h-5 w-48 rounded-xs bg-surface-2" />
-      <div className="h-4 w-64 rounded-xs bg-surface-2" />
+    <div className="ih-account-profile" aria-busy="true">
+      <span className="ih-sr">Loading your account</span>
+      <span className="ih-skel h-11 w-11 rounded-full" aria-hidden />
+      <span className="grid gap-2" aria-hidden>
+        <span className="ih-skel h-4 w-48" />
+        <span className="ih-skel h-3.5 w-64" />
+      </span>
     </div>
   );
 }

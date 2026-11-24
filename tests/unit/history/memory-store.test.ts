@@ -75,4 +75,15 @@ describe("memory history store", () => {
     await store.addVersion({ id: "1", promptId: "p", content: "a", source: "generated", engine: { kind: "basic" }, createdAt: 1 });
     expect((await store.getVersions("p")).map((v) => v.id)).toEqual(["1", "2"]);
   });
+
+  it("counts versions per prompt for the history rows", async () => {
+    const store = createMemoryStore();
+    expect(await store.versionCounts()).toEqual({});
+    await store.addVersion({ id: "1", promptId: "p", content: "a", source: "generated", engine: { kind: "basic" }, createdAt: 1 });
+    await store.addVersion({ id: "2", promptId: "p", content: "b", source: "edited", engine: { kind: "manual" }, createdAt: 2 });
+    await store.addVersion({ id: "3", promptId: "q", content: "c", source: "generated", engine: { kind: "basic" }, createdAt: 3 });
+    expect(await store.versionCounts()).toEqual({ p: 2, q: 1 });
+    await store.purge("p");
+    expect(await store.versionCounts()).toEqual({ q: 1 });
+  });
 });

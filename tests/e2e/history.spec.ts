@@ -1,5 +1,15 @@
 import { expect, test, type Page } from "@playwright/test";
-import { editor, generateFromIdea, historyRow, historyRowAction, mod, openApp, selectTarget, waitForPrompt } from "./helpers";
+import {
+  editor,
+  generateFromIdea,
+  historyRow,
+  historyRowAction,
+  mod,
+  openApp,
+  selectTarget,
+  showPlainText,
+  waitForPrompt,
+} from "./helpers";
 
 async function openHistory(page: Page) {
   const toggle = page.getByTestId("history-toggle");
@@ -30,6 +40,7 @@ test("8. history persists across reloads; versions restore; delete, undo and rec
   await expect(page.getByText(/Viewing version 1/)).toBeVisible();
   await page.getByRole("button", { name: "Restore this version" }).click();
   await expect(page.getByTestId("version-label")).toHaveAccessibleName("Version 3 of 3");
+  await showPlainText(page);
   expect(await editor(page).inputValue()).toBe(v1);
 
   // Search and filter.

@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Kbd } from "./kbd";
 
-/** 600 ms delay, then instant for the next tooltip (DESIGN §6.2, §7 #13). */
+/** 600 ms delay, then instant for the next tooltip in a row. */
 export function TooltipProvider({ children }: { children: ReactNode }) {
   return (
     <T.Provider delayDuration={600} skipDelayDuration={400}>
@@ -38,10 +38,7 @@ export function Tip({
           align={align}
           sideOffset={6}
           collisionPadding={12}
-          className={cn(
-            "floating tooltip z-50 flex max-w-[280px] items-center gap-2 rounded-md bg-surface px-2.5 py-1.5 text-fg type-meta shadow-float",
-            className,
-          )}
+          className={cn("ih-floating ih-tip", className)}
         >
           <span>{label}</span>
           {keys && <Kbd keys={keys} />}

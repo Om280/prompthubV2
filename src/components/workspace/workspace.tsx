@@ -12,31 +12,42 @@ import { createMemoryStore } from "@/lib/history/memory-store";
 import { createMockClient } from "@/lib/mock/adapter";
 import { buildHistorySeed } from "@/lib/mock/history-seed";
 import { buildPreviewSession, readPreview, type PreviewConfig } from "@/lib/mock/preview";
+import { AccountButton } from "@/components/auth/account-button";
+import { AuthProvider, useAuth } from "@/components/auth/auth-context";
+import { SignInCard } from "@/components/auth/sign-in-card";
 import { HistoryPanel } from "@/components/history/history-panel";
 import { ShortcutSheet } from "@/components/shortcuts/shortcut-sheet";
 import { Button } from "@/components/ui/button";
 import { BottomSheet } from "@/components/ui/sheet";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { useIsDesktopRail, useIsMobile, useKeyLabels, useReducedMotion } from "@/hooks/use-media";
+import { useEditorView } from "@/hooks/use-editor-view";
+import { useIsDesktopRail, useIsMobile, useIsWide, useKeyLabels, useReducedMotion } from "@/hooks/use-media";
 import { initialSession, latest, useSession, type SessionState } from "@/hooks/use-session";
 import { keys as match, useShortcuts } from "@/hooks/use-shortcuts";
-import { applyTheme } from "@/hooks/use-theme";
-import { cn, isMacPlatform } from "@/lib/utils";
-import { AuthProvider, useAuth } from "@/components/auth/auth-context";
-import { Composer, EntranceFade } from "./composer";
-import { Editor } from "./editor";
-import { Header } from "./header";
+import { applyTheme, useSystemThemeSync } from "@/hooks/use-theme";
+import { isMacPlatform, wordCount } from "@/lib/utils";
+import { BriefColumn, BriefCompact } from "./brief";
+import { CommandPalette } from "./command-palette";
+import { Composer } from "./composer";
 import { activityLabel } from "./labels";
 import { MobileBar } from "./mobile-bar";
-import { AnswersSummary, ClarifyingSkeleton, Questions } from "./questions";
-import { RegenerateForMobile, SettingsRow } from "./settings-row";
-import { FirstRunError, Provenance, StatusLines } from "./status-lines";
-import { Toolbar } from "./toolbar";
-import { VersionSwitcher } from "./version-switcher";
-import { WorkspaceContext, type CopyState, type CopyVia, type WorkspaceValue } from "./workspace-context";
+import { ErrorSheet, GhostPlate } from "./plate";
+import { PromptSheet } from "./prompt-sheet";
+import { answerFieldId, ClarifyingSheet, Questions } from "./questions";
+import { activeQuestion as activeQuestionOf, nextOpenQuestion } from "./stepper";
+import { TopBar } from "./top-bar";
+import {
+  WorkspaceContext,
+  type CopyState,
+  type CopyVia,
+  type EnginePlacement,
+  type WorkspaceValue,
+} from "./workspace-context";
 
 const noopSubscribe = () => () => {};
+const DRAWER = [0.32, 0.72, 0, 1] as const;
+const COPIED_MS = 2400;
 
 /**
  * Client root. Reads the dev-only `?preview=` config after hydration and remounts the workspace
@@ -49,6 +60,7 @@ export function Workspace() {
     () => null,
   );
   const config = useMemo(() => (search === null ? null : readPreview(search)), [search]);
+  useSystemThemeSync();
   return (
     <MotionConfig reducedMotion="user">
       <TooltipProvider>
@@ -96,6 +108,44 @@ function textToCopy(s: SessionState): string {
   return s.versions.length > 0 ? s.draft : "";
 }
 
+/**
+ * The copy charge (DIRECTION-C §10): each piece flashes from its tint to the platform's solid colour
+ * and back, lifting 2px, top to bottom, ~50ms apart. WAAPI, so it runs on the compositor. Reduced
+ * motion: one cobalt-wash fade on every piece at once.
+ */
+function runCharge(sheet: HTMLElement | null, reduced: boolean) {
+  if (!sheet) return;
+  const pieces = Array.from(sheet.querySelectorAll<HTMLElement>("[data-piece]"));
+  const cs = getComputedStyle(sheet);
+  const tint = cs.getPropertyValue("--p-tint").trim();
+  const solid = cs.getPropertyValue("--p").trim();
+  const deep = cs.getPropertyValue("--p-deep").trim();
+  const on = cs.getPropertyValue("--p-on").trim() || "#fff";
+  const wash = cs.getPropertyValue("--cobalt-wash").trim();
+  if (pieces.length === 0) {
+    sheet
+      .querySelector<HTMLElement>("[data-wash]")
+      ?.animate([{ opacity: 0.9 }, { opacity: 0 }], { duration: 520, easing: "cubic-bezier(0.23, 1, 0.32, 1)" });
+    return;
+  }
+  pieces.forEach((el, i) => {
+    if (reduced) {
+      el.animate([{ backgroundColor: tint }, { backgroundColor: wash }, { backgroundColor: tint }], { duration: 600 });
+      return;
+    }
+    el.animate(
+      [
+        { backgroundColor: tint, color: deep, transform: "translateY(0)" },
+        { backgroundColor: solid, color: on, transform: "translateY(-2px)", offset: 0.3 },
+        { backgroundColor: tint, color: deep, transform: "translateY(0)" },
+      ],
+      { duration: 620, delay: i * 52 - Math.min(i, 4) * 4, easing: "cubic-bezier(0.23, 1, 0.32, 1)" },
+    );
+  });
+}
+
+type Shape = "single" | "compose-split" | "work-split" | "docked";
+
 function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
   const [env] = useState(() => createEnv(config));
   const { client, history } = env;
@@ -105,17 +155,20 @@ function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
   const [railOpen, setRailOpenState] = useState(config?.historyOpen ?? false);
   const [railAnimated, setRailAnimated] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [copy, setCopy] = useState<CopyState>({ copied: false, animate: false });
-  const [answersOpen, setAnswersOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [copy, setCopy] = useState<CopyState>({ copied: false, animate: false, words: 0 });
+  const [activeQuestion, setActiveQuestion] = useState<string | null>(null);
   const [liveMessage, setLiveMessage] = useState("");
-  const desktopRail = useIsDesktopRail();
+  const [view, setView] = useEditorView();
+  const split = useIsDesktopRail();
+  const wide = useIsWide();
   const mobile = useIsMobile();
   const reduced = useReducedMotion();
   const keyLabels = useKeyLabels();
 
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
-  const washRef = useRef<HTMLDivElement>(null);
+  const sheetRef = useRef<HTMLElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const generateRef = useRef<HTMLButtonElement>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -167,14 +220,23 @@ function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
     void fetchAiStatus();
   }, [fetchAiStatus, authStatus]);
 
-  // Desktop only: the composer has focus on load (§6.1).
+  // Desktop only: the composer has focus on load.
   useEffect(() => {
     if (state.phase === "idle" && window.matchMedia("(pointer: fine)").matches) composerRef.current?.focus();
     // Only on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Short-lived meta notes.
+  // Each new set of questions opens on its first unanswered step.
+  const [lastPhase, setLastPhase] = useState(state.phase);
+  if (state.phase !== lastPhase) {
+    setLastPhase(state.phase);
+    // Pin the open step, so typing an answer into it doesn’t move the stepper on.
+    if (state.phase === "answering") setActiveQuestion(activeQuestionOf(state.questions, null));
+    else if (state.phase === "clarifying") setActiveQuestion(null);
+  }
+
+  // Short-lived notes.
   useEffect(() => {
     const n = state.notice;
     if (!n || n.kind === "stopped" || n.kind === "same") return;
@@ -182,13 +244,25 @@ function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
     return () => clearTimeout(t);
   }, [state.notice, actions]);
 
+  // The blocks are tinted for the platform the text on screen was written for. A failed regenerate
+  // for another platform leaves the old prompt (and its tint) in place.
+  const [shown, setShown] = useState({ count: state.versions.length, id: state.promptId, target: state.generated?.target ?? state.target });
+  if (state.versions.length !== shown.count || state.promptId !== shown.id) {
+    setShown({ count: state.versions.length, id: state.promptId, target: state.generated?.target ?? state.target });
+  }
+  const writtenFor =
+    state.stream && (state.stream.text || state.versions.length === 0)
+      ? (state.generated?.target ?? state.target)
+      : state.versions.length > 0
+        ? shown.target
+        : state.target;
+
   const railAnimTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const setRailOpen = useCallback((open: boolean, via: "pointer" | "keyboard") => {
     setRailAnimated(via === "pointer");
     setRailOpenState(open);
-    // Layout animation is only for the toggle itself; switch it off so streaming re-renders stay cheap.
     if (railAnimTimer.current) clearTimeout(railAnimTimer.current);
-    if (via === "pointer") railAnimTimer.current = setTimeout(() => setRailAnimated(false), 300);
+    if (via === "pointer") railAnimTimer.current = setTimeout(() => setRailAnimated(false), 320);
   }, []);
 
   const copyText = textToCopy(state);
@@ -199,8 +273,8 @@ function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
 
   const copyPrompt = useCallback(
     async (via: CopyVia) => {
-      // Exactly the textarea value of the version on screen. While a stream runs the textarea shows
-      // incoming text, so Copy falls back to the last committed version.
+      // Exactly the text of the version on screen. While a stream runs, Copy falls back to the last
+      // committed version.
       const s = actions.getState();
       const el = editorRef.current;
       const text = el && !s.stream && s.versions.length > 0 ? el.value : copyTextRef.current;
@@ -212,30 +286,30 @@ function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
           duration: Infinity,
           closeButton: true,
         });
-        const el = editorRef.current;
-        if (el) {
-          el.focus();
-          el.select();
-        }
+        // Show the whole prompt as one field and select it, so a manual copy takes everything.
+        setView("plain");
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            const field = editorRef.current;
+            field?.focus();
+            field?.select();
+          }),
+        );
         return;
       }
-      setCopy((c) => (c.copied ? c : { copied: true, animate: via === "pointer" && !reduced }));
+      setCopy({ copied: true, animate: via === "pointer" && !reduced, words: wordCount(text) });
       if (copyTimer.current) clearTimeout(copyTimer.current);
-      copyTimer.current = setTimeout(() => setCopy({ copied: false, animate: false }), 1600);
+      copyTimer.current = setTimeout(() => setCopy((c) => ({ ...c, copied: false, animate: false })), COPIED_MS);
       announce("Prompt copied");
-      if (!reduced) {
-        washRef.current?.animate([{ opacity: 1 }, { opacity: 0 }], {
-          duration: 520,
-          easing: "cubic-bezier(0.23, 1, 0.32, 1)",
-        });
-      }
+      // The charge answers a click; from the keyboard the outline and header line confirm it.
+      if (via === "pointer") runCharge(sheetRef.current, reduced);
     },
-    [actions, announce, reduced],
+    [actions, announce, reduced, setView],
   );
 
   const newPrompt = useCallback(() => {
     actions.reset();
-    setAnswersOpen(false);
+    setActiveQuestion(null);
     requestAnimationFrame(() => {
       if (window.matchMedia("(pointer: fine)").matches) composerRef.current?.focus();
     });
@@ -245,12 +319,11 @@ function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
     const el = document.activeElement?.closest("[data-question-id]");
     const id = el?.getAttribute("data-question-id");
     if (!id) return false;
-    const qs = actions.getState().questions;
     actions.dispatch({ type: "skip", id });
-    const idx = qs.findIndex((q) => q.id === id);
-    const next = qs.slice(idx + 1).find((q) => !q.skipped);
+    const next = nextOpenQuestion(actions.getState().questions, id);
+    setActiveQuestion(next);
     requestAnimationFrame(() => {
-      if (next) document.getElementById(`answer-${next.id}`)?.focus();
+      if (next) document.getElementById(answerFieldId(next))?.focus();
       else generateRef.current?.focus();
     });
     return true;
@@ -258,6 +331,16 @@ function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
 
   useShortcuts(
     [
+      {
+        id: "palette",
+        match: match.palette,
+        inEditable: true,
+        inModal: true,
+        run: () => {
+          if (shortcutsOpen) return false;
+          setPaletteOpen(!paletteOpen);
+        },
+      },
       { id: "generate", match: match.generate, inEditable: true, run: () => actions.primary() },
       {
         id: "copy",
@@ -292,10 +375,17 @@ function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
         },
       },
     ],
-    { modalOpen: shortcutsOpen },
+    { modalOpen: shortcutsOpen || paletteOpen },
   );
 
+  const phase = state.phase;
+  const compose = phase === "idle";
+  const hasOutput = state.versions.length > 0 || !!state.stream;
+  const docked = split && railOpen;
+  const shape: Shape = docked ? "docked" : compose && split ? "compose-split" : !compose && wide ? "work-split" : "single";
+  const enginePlacement: EnginePlacement = !mobile ? "topbar" : compose ? "composer" : hasOutput ? "sheet" : "brief";
   const basic = aiStatus?.mode === "basic";
+
   const value: WorkspaceValue = {
     client,
     history,
@@ -307,128 +397,99 @@ function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
     state,
     actions,
     keys: keyLabels,
+    wide,
+    mobile,
+    enginePlacement,
+    writtenFor,
     railOpen,
     setRailOpen,
+    paletteOpen,
+    setPaletteOpen,
     shortcutsOpen,
     setShortcutsOpen,
+    view,
+    setView,
+    activeQuestion,
+    setActiveQuestion,
     copy,
     copyPrompt: (via) => void copyPrompt(via),
     announce,
     newPrompt,
     composerRef,
     editorRef,
-    washRef,
+    sheetRef,
     searchRef,
     generateRef,
     copyText,
   };
 
-  const phase = state.phase;
-  const hasOutput = state.versions.length > 0 || !!state.stream;
-  const docked = desktopRail && railOpen;
-  const drawer = [0.32, 0.72, 0, 1] as const;
+  const side =
+    shape === "docked" ? (
+      <motion.aside
+        key="history"
+        id="history-panel"
+        aria-label="History"
+        className="ih-side"
+        initial={railAnimated ? (reduced ? { opacity: 0 } : { opacity: 0, x: -24 }) : false}
+        animate={{ opacity: 1, x: 0, transition: { duration: railAnimated ? 0.3 : 0, ease: DRAWER } }}
+      >
+        <HistoryPanel variant="docked" />
+      </motion.aside>
+    ) : shape === "compose-split" ? (
+      <div key="composer" className="ih-side">
+        <Composer />
+      </div>
+    ) : shape === "work-split" ? (
+      <BriefColumn key="brief" />
+    ) : null;
 
   return (
     <WorkspaceContext.Provider value={value}>
-      <div className="min-h-dvh">
-        <AnimatePresence initial={false}>
-          {docked && (
-            <motion.aside
-              id="history-rail"
-              aria-label="History"
-              key="rail"
-              initial={railAnimated ? { opacity: 0, x: -16 } : false}
-              animate={{ opacity: 1, x: 0, transition: { duration: railAnimated ? 0.24 : 0, ease: drawer } }}
-              exit={
-                railAnimated
-                  ? { opacity: 0, x: -16, transition: { duration: 0.18, ease: drawer } }
-                  : { opacity: 0, transition: { duration: 0 } }
-              }
-              className="fixed inset-y-0 left-0 z-30 w-[var(--w-rail)] border-r border-border bg-surface"
-            >
-              <HistoryPanel variant="docked" />
-            </motion.aside>
-          )}
-        </AnimatePresence>
-
-        <div className={cn("flex min-h-dvh flex-col", docked && "pl-[var(--w-rail)]")}>
-          <Header />
-          <motion.main
-            layout={railAnimated ? "position" : false}
-            transition={{ duration: 0.24, ease: drawer }}
-            className={cn("flex-1 pb-32 sm:pb-24", phase === "idle" ? "pt-[max(24px,calc(30dvh-128px))]" : "pt-8")}
+      <div className="ih-app" data-platform={state.target}>
+        <TopBar accountSlot={<AccountButton />} />
+        <main className="ih-layout" data-shape={shape} data-bar={mobile && hasOutput}>
+          {side}
+          <motion.div
+            className="ih-main"
+            layout={railAnimated && !reduced ? "position" : false}
+            transition={{ duration: 0.3, ease: DRAWER }}
           >
-            <div className="column">
-              <EntranceFade>
-                <SettingsRow />
-              </EntranceFade>
-              <div className="mt-1">
-                <RegenerateForMobile />
-              </div>
-              <div className={phase === "idle" ? "mt-6" : "mt-4"}>
-                <Composer />
-              </div>
+            <SignInCard />
+            {compose ? (
+              <>
+                {(shape === "docked" || shape === "single") && <Composer />}
+                {shape !== "docked" && <GhostPlate />}
+              </>
+            ) : (
+              <>
+                {shape !== "work-split" && <BriefCompact />}
+                <AnimatePresence initial={false} mode="popLayout">
+                  {phase === "clarifying" && (
+                    <motion.div key="clarifying" exit={{ opacity: 0, transition: { duration: 0.12 } }}>
+                      <ClarifyingSheet />
+                    </motion.div>
+                  )}
+                  {phase === "answering" && (
+                    <motion.div key="questions" exit={{ opacity: 0, transition: { duration: 0.12 } }}>
+                      <Questions />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+                {phase === "error" && !hasOutput && <ErrorSheet />}
+                {hasOutput && <PromptSheet />}
+              </>
+            )}
+          </motion.div>
+        </main>
 
-              {phase === "error" && !hasOutput && (
-                <div className="mt-8">
-                  <FirstRunError />
-                </div>
-              )}
-
-              <AnimatePresence initial={false} mode="popLayout">
-                {phase === "clarifying" && (
-                  <motion.div
-                    key="clarifying"
-                    className="mt-12"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0, transition: { duration: 0.12 } }}
-                  >
-                    <ClarifyingSkeleton />
-                  </motion.div>
-                )}
-                {phase === "answering" && (
-                  <motion.div
-                    key="questions"
-                    // -mx-2/px-2: room so the height-collapse clip doesn't cut glyph overhangs or chip borders at the column edge.
-                    className="mt-12 -mx-2 overflow-hidden px-2"
-                    exit={{ opacity: 0, height: 0, transition: { duration: 0.22, ease: [0.77, 0, 0.175, 1] } }}
-                  >
-                    <Questions />
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {hasOutput && (
-                <div className="mt-3">
-                  <AnswersSummary
-                    open={answersOpen}
-                    onToggle={() => setAnswersOpen((o) => !o)}
-                    right={mobile ? null : <VersionSwitcher />}
-                  />
-                </div>
-              )}
-
-              {hasOutput && (
-                <div className="mt-6">
-                  <Toolbar />
-                  <StatusLines />
-                  <Editor />
-                  <Provenance />
-                </div>
-              )}
-            </div>
-          </motion.main>
-        </div>
-
-        {!desktopRail && (
+        {!split && (
           <BottomSheet
             open={railOpen}
             onOpenChange={(o) => setRailOpen(o, "pointer")}
             title="History"
             tall
             headerRight={
-              <Button variant="text" className="-mr-1" onClick={() => setRailOpen(false, "pointer")}>
+              <Button size="sm" onClick={() => setRailOpen(false, "pointer")}>
                 Done
               </Button>
             }
@@ -437,9 +498,10 @@ function WorkspaceInner({ config }: { config: PreviewConfig | null }) {
           </BottomSheet>
         )}
 
-        <MobileBar />
+        {mobile && <MobileBar />}
+        <CommandPalette />
         <ShortcutSheet />
-        <div className="sr-only" aria-live="polite" aria-atomic="true">
+        <div className="ih-sr" aria-live="polite" aria-atomic="true">
           {liveMessage}
         </div>
       </div>

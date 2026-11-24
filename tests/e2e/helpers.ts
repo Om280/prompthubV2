@@ -8,6 +8,9 @@ export const mod = (key: string) => `${MOD}+${key}`;
 export async function openApp(page: Page) {
   await page.goto("/");
   await expect(page.getByTestId("engine-indicator")).toBeVisible();
+  // The engine status is fetched by the client, so a settled status also means the page has
+  // hydrated (text typed into a field before that is reset by React).
+  await expect(page.getByTestId("engine-indicator")).toHaveAttribute("data-engine", /^(basic|ai)$/);
 }
 
 export function composer(page: Page): Locator {
@@ -30,12 +33,23 @@ export async function clickGenerate(page: Page) {
   await page.getByRole("button", { name: /^Generate prompt/ }).click();
 }
 
+/**
+ * The prompt opens in the Blocks view (one field per section). The whole prompt as one textarea,
+ * the `prompt-editor`, is the Plain text view; switch to it to read or type the full text.
+ */
+export async function showPlainText(page: Page) {
+  const plain = page.getByRole("radio", { name: "Plain text" });
+  if ((await plain.getAttribute("aria-checked")) !== "true") await plain.click();
+  await expect(editor(page)).toBeVisible();
+}
+
 /** Waits until a prompt has been committed as a version and returns its text. */
 export async function waitForPrompt(
   page: Page,
   versionText: string | RegExp = /Version \d+ of \d+/,
 ): Promise<string> {
   await expect(page.getByTestId("version-label")).toHaveAccessibleName(versionText, { timeout: 15_000 });
+  await showPlainText(page);
   const value = await editor(page).inputValue();
   expect(value.length).toBeGreaterThan(40);
   return value;

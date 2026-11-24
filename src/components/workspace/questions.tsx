@@ -1,89 +1,186 @@
 "use client";
 
 import { Check } from "lucide-react";
-import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { motion } from "motion/react";
+import { useEffect, useRef, type KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { useAutosize } from "@/hooks/use-autosize";
+import { useReducedMotion } from "@/hooks/use-media";
 import type { QuestionItem } from "@/hooks/use-session";
-import { cn } from "@/lib/utils";
+import { activeQuestion, nextOpenQuestion, stepStatus, stepSummary, type StepStatus } from "./stepper";
 import { useWorkspace } from "./workspace-context";
 
-const EASE = [0.23, 1, 0.32, 1] as const;
-const EASE_IN_OUT = [0.77, 0, 0.175, 1] as const;
-const STAGGER = [0, 0.045, 0.08, 0.11];
-
-function fieldId(id: string) {
+export function answerFieldId(id: string) {
   return `answer-${id}`;
 }
 
-/** Follow-up questions (DESIGN §6.4). */
+/** Focus the answer field of a step once it has rendered open. */
+export function focusAnswer(id: string) {
+  requestAnimationFrame(() => document.getElementById(answerFieldId(id))?.focus());
+}
+
+/**
+ * Follow-up questions as a short guided stepper (DIRECTION-C §8): one sheet, a segmented progress
+ * bar, numbered steps (they are a real sequence). The open step takes typing or a chip; answered
+ * steps collapse to the answer with "Change", skipped ones say "Skipped" with "Undo".
+ */
 export function Questions() {
-  const { state, actions, keys, generateRef } = useWorkspace();
+  const { state, actions, keys, generateRef, activeQuestion: chosen, setActiveQuestion } = useWorkspace();
   const qs = state.questions;
-  const answered = qs.filter((q) => !q.skipped && q.answer.trim()).length;
-  const skipped = qs.filter((q) => q.skipped).length;
+  const active = activeQuestion(qs, chosen);
 
   // Focus starts in the first field (not on touch, where the keyboard would cover the questions).
   useEffect(() => {
     if (!window.matchMedia("(pointer: fine)").matches) return;
-    const first = qs.find((q) => !q.skipped);
-    if (first) document.getElementById(fieldId(first.id))?.focus();
+    const first = activeQuestion(qs, null);
+    if (first) focusAnswer(first);
     // Only when the questions first arrive.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const focusAfter = (id: string) => {
-    const idx = qs.findIndex((q) => q.id === id);
-    const next = qs.slice(idx + 1).find((q) => !q.skipped);
-    if (next) document.getElementById(fieldId(next.id))?.focus();
-    else generateRef.current?.focus();
+  /** Move on from a step: to the next one without an answer, or to Generate when none is left. */
+  const advanceFrom = (id: string) => {
+    const next = nextOpenQuestion(actions.getState().questions, id);
+    setActiveQuestion(next);
+    if (next) focusAnswer(next);
+    else requestAnimationFrame(() => generateRef.current?.focus());
+  };
+
+  const open = (id: string) => {
+    setActiveQuestion(id);
+    focusAnswer(id);
   };
 
   return (
-    <section aria-labelledby="questions-intro">
-      <div className="flex items-center justify-between gap-4">
-        <h2 id="questions-intro" className="type-ui text-fg-muted">
-          {qs.length === 1 ? "1 question to sharpen the prompt" : `${qs.length} questions to sharpen the prompt`}
-        </h2>
-        <Button variant="text" className="-mr-1" onClick={actions.skipAll}>
-          Skip all
-        </Button>
+    <section className="ih-sheet" aria-labelledby="questions-title">
+      <div className="ih-qhead">
+        <div className="ih-qhead-top">
+          <h2 id="questions-title" className="ih-sheet-title">
+            {qs.length === 1 ? "1 question to sharpen the prompt" : `${qs.length} questions to sharpen the prompt`}
+          </h2>
+          <Button size="sm" onClick={actions.skipAll}>
+            Skip all
+          </Button>
+        </div>
+        <div className="ih-progress" aria-hidden>
+          {qs.map((q) => (
+            <span key={q.id} className="ih-progress-seg" data-s={stepStatus(q, active)} />
+          ))}
+        </div>
       </div>
 
-      <div className="mt-6 flex flex-col gap-8">
+      <ol className="ih-steps">
         {qs.map((q, i) => (
-          <motion.div
+          <Step
             key={q.id}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.26, ease: EASE, delay: STAGGER[i] ?? 0.11 }}
-          >
-            <QuestionBlock q={q} onAdvance={() => focusAfter(q.id)} />
-          </motion.div>
+            q={q}
+            index={i}
+            total={qs.length}
+            status={stepStatus(q, active)}
+            onOpen={() => open(q.id)}
+            onAnswer={(text) => actions.dispatch({ type: "answer", id: q.id, text })}
+            onAdvance={() => advanceFrom(q.id)}
+            onSkip={() => {
+              actions.dispatch({ type: "skip", id: q.id });
+              advanceFrom(q.id);
+            }}
+            onUnskip={() => {
+              actions.dispatch({ type: "unskip", id: q.id });
+              open(q.id);
+            }}
+          />
         ))}
-      </div>
+      </ol>
 
-      <div className="mt-10 flex items-center gap-4">
-        <Button ref={generateRef} variant="primary" className="hidden sm:inline-flex" onClick={actions.primary}>
+      <div className="ih-qfoot">
+        <Button ref={generateRef} variant="primary" onClick={actions.primary}>
           Generate prompt
-          <Kbd keys={[keys.mod, keys.enter]} tone="on-accent" className="ml-1" />
+          <Kbd keys={[keys.mod, keys.enter]} tone="on-accent" />
         </Button>
-        <p className="type-meta text-fg-subtle" aria-live="polite">
-          {answered} answered, {skipped} skipped
+        <p className="ih-count" aria-live="polite">
+          {stepSummary(qs)}
         </p>
       </div>
     </section>
   );
 }
 
-function QuestionBlock({ q, onAdvance }: { q: QuestionItem; onAdvance: () => void }) {
-  const { actions } = useWorkspace();
-  const ref = useRef<HTMLTextAreaElement>(null);
-  useAutosize(ref, q.answer, 3);
-  const answered = !q.skipped && q.answer.trim().length > 0;
+interface StepProps {
+  q: QuestionItem;
+  index: number;
+  total: number;
+  status: StepStatus;
+  onOpen: () => void;
+  onAnswer: (text: string) => void;
+  onAdvance: () => void;
+  onSkip: () => void;
+  onUnskip: () => void;
+}
+
+function Step(props: StepProps) {
+  const { q, index, status, onOpen, onSkip, onUnskip } = props;
   const qid = `question-${q.id}`;
+  const common = { "data-question-id": q.id, "data-question-text": q.question, "data-s": status };
+
+  if (status === "active") {
+    return (
+      <li className="ih-step" {...common}>
+        <ActiveStep {...props} qid={qid} />
+      </li>
+    );
+  }
+
+  return (
+    <li className="ih-step" {...common}>
+      <span className="ih-step-num">
+        {status === "answered" ? <Check size={15} strokeWidth={2.75} aria-label="Answered" /> : index + 1}
+      </span>
+      <div className="min-w-0">
+        <p id={qid} className="ih-step-q">
+          {q.question}
+        </p>
+        {status === "answered" && <p className="ih-step-a">{q.answer.trim()}</p>}
+        {status === "skipped" && <p className="ih-step-skipped">Skipped</p>}
+      </div>
+      <div className="ih-step-actions">
+        {status === "answered" && (
+          <Button size="sm" onClick={onOpen} aria-describedby={qid}>
+            Change
+          </Button>
+        )}
+        {status === "skipped" && (
+          <Button size="sm" onClick={onUnskip} aria-describedby={qid}>
+            Undo
+          </Button>
+        )}
+        {status === "open" && (
+          <>
+            <Button size="sm" onClick={onOpen} aria-describedby={qid}>
+              Answer
+            </Button>
+            <Button size="sm" onClick={onSkip} aria-describedby={qid}>
+              Skip
+            </Button>
+          </>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function ActiveStep({ q, index, total, qid, onAnswer, onAdvance, onSkip }: StepProps & { qid: string }) {
+  const reduced = useReducedMotion();
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const chipTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useAutosize(ref, q.answer, 4);
+  useEffect(
+    () => () => {
+      if (chipTimer.current) clearTimeout(chipTimer.current);
+    },
+    [],
+  );
+  const hasAnswer = q.answer.trim().length > 0;
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
@@ -92,198 +189,107 @@ function QuestionBlock({ q, onAdvance }: { q: QuestionItem; onAdvance: () => voi
     } else if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
-      if (q.answer) actions.dispatch({ type: "answer", id: q.id, text: "" });
-      else skip();
+      if (q.answer) onAnswer("");
+      else onSkip();
     }
   };
 
-  const skip = () => {
-    actions.dispatch({ type: "skip", id: q.id });
-    onAdvance();
-  };
-
-  const undo = () => {
-    actions.dispatch({ type: "unskip", id: q.id });
-    requestAnimationFrame(() => document.getElementById(fieldId(q.id))?.focus());
-  };
-
   return (
-    <div data-question-id={q.id}>
-      <div className="flex items-start justify-between gap-4">
-        <p
-          id={qid}
-          className={cn("type-question transition-colors duration-150", q.skipped ? "text-fg-subtle" : "text-fg")}
-        >
-          {q.question}
-        </p>
-        <div className="flex h-[26px] shrink-0 items-center gap-2">
-          {q.skipped ? (
-            <motion.span
-              className="flex items-center gap-2"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.12, ease: EASE }}
-            >
-              <span className="type-meta text-fg-subtle">Skipped</span>
-              <Button variant="text" onClick={undo} aria-describedby={qid}>
-                Undo
-              </Button>
-            </motion.span>
-          ) : answered ? (
-            <>
-              <Check className="size-3 text-fg-subtle" aria-hidden />
-              <Button
-                variant="subtle"
-                onClick={() => actions.dispatch({ type: "answer", id: q.id, text: "" })}
-                aria-describedby={qid}
+    <>
+      <span className="ih-step-num">{index + 1}</span>
+      <h3 className="ih-step-active-q" id={qid}>
+        {q.question}
+        {q.why && <span className="ih-step-why block">{q.why}</span>}
+      </h3>
+      <span className="ih-step-count" aria-hidden>
+        {index + 1} of {total}
+      </span>
+      <motion.div
+        className="ih-step-body"
+        initial={reduced ? { opacity: 0 } : { opacity: 0, y: -4 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.2, ease: [0.23, 1, 0.32, 1] }}
+      >
+        <textarea
+          ref={ref}
+          id={answerFieldId(q.id)}
+          className="ih-answer-input"
+          rows={1}
+          value={q.answer}
+          maxLength={1000}
+          aria-labelledby={qid}
+          placeholder="Type an answer or pick one"
+          enterKeyHint="next"
+          onChange={(e) => onAnswer(e.target.value)}
+          onKeyDown={onKeyDown}
+        />
+        {q.suggestions.length > 0 && (
+          <div className="ih-chips" role="group" aria-label="Suggested answers">
+            {q.suggestions.slice(0, 4).map((s) => (
+              <button
+                key={s}
+                type="button"
+                data-chip
+                className="ih-chip"
+                aria-pressed={q.answer.trim() === s}
+                onClick={() => {
+                  onAnswer(s);
+                  // The chosen chip shows its selected state for a beat, then the next step opens.
+                  if (chipTimer.current) clearTimeout(chipTimer.current);
+                  chipTimer.current = setTimeout(onAdvance, reduced ? 0 : 180);
+                }}
               >
-                Clear
-              </Button>
-            </>
-          ) : (
-            <Button variant="subtle" onClick={skip} aria-describedby={qid}>
-              Skip
-            </Button>
-          )}
-        </div>
-      </div>
-      {q.why && !q.skipped && <p className="mt-0.5 type-meta text-fg-subtle">{q.why}</p>}
-
-      <AnimatePresence initial={false}>
-        {!q.skipped && (
-          <motion.div
-            key="body"
-            // -mx-2/px-2: keeps chip borders and glyph overhangs inside the collapse clip.
-            className="-mx-2 overflow-hidden px-2"
-            initial={{ height: 0, opacity: 0 }}
-            animate={{
-              height: "auto",
-              opacity: 1,
-              transition: { height: { duration: 0.2, ease: EASE_IN_OUT }, opacity: { duration: 0.2, ease: EASE } },
-            }}
-            exit={{
-              height: 0,
-              opacity: 0,
-              transition: { height: { duration: 0.2, ease: EASE_IN_OUT }, opacity: { duration: 0.12, ease: EASE } },
-            }}
-          >
-            <div className="field-line mt-2">
-              <textarea
-                ref={ref}
-                id={fieldId(q.id)}
-                rows={1}
-                value={q.answer}
-                maxLength={1000}
-                aria-labelledby={qid}
-                placeholder="Type an answer or pick one"
-                onChange={(e) => actions.dispatch({ type: "answer", id: q.id, text: e.target.value })}
-                onKeyDown={onKeyDown}
-                className="block w-full resize-none overflow-hidden bg-transparent pb-2 pt-1 type-input text-fg"
-              />
-            </div>
-            {q.suggestions.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-2 pb-0.5 pl-px">
-                {q.suggestions.slice(0, 3).map((s) => {
-                  const selected = q.answer.trim() === s;
-                  return (
-                    <button
-                      key={s}
-                      type="button"
-                      aria-pressed={selected}
-                      onClick={() => {
-                        actions.dispatch({ type: "answer", id: q.id, text: s });
-                        onAdvance();
-                      }}
-                      className={cn(
-                        "press h-8 rounded-sm px-3 type-ui hover:bg-surface-2 coarse:h-10",
-                        selected
-                          ? "text-fg-strong shadow-[inset_0_0_0_1px_var(--color-accent)]"
-                          : "text-fg shadow-[inset_0_0_0_1px_var(--color-border-control)]",
-                      )}
-                    >
-                      {s}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </motion.div>
+                {s}
+              </button>
+            ))}
+          </div>
         )}
-      </AnimatePresence>
-    </div>
+        <div className="ih-step-actions">
+          <Button variant="secondary" size="sm" disabled={!hasAnswer} onClick={onAdvance}>
+            Save answer
+          </Button>
+          <Button size="sm" onClick={onSkip}>
+            Skip
+          </Button>
+        </div>
+      </motion.div>
+    </>
   );
 }
 
-/** Loading state while questions are being found (DESIGN §6.11). */
-export function ClarifyingSkeleton() {
-  const { state } = useWorkspace();
+/** Loading state while questions are found. */
+export function ClarifyingSheet() {
+  const { state, actions } = useWorkspace();
   return (
-    <section aria-busy="true" aria-live="polite">
-      <p className="type-meta text-fg-subtle">
-        {state.slow ? "Still working. Taking longer than usual." : "Finding what matters"}
-      </p>
-      <div className="mt-6 flex flex-col gap-8" aria-hidden>
+    <section className="ih-sheet" aria-busy="true" aria-labelledby="clarify-status">
+      <div className="ih-sheet-head">
+        <div className="ih-status" id="clarify-status" role="status">
+          <span className="ih-pulse" aria-hidden>
+            <i />
+            <i />
+            <i />
+          </span>
+          <span>{state.slow ? "Still working. Taking longer than usual." : "Finding what matters"}</span>
+        </div>
+        <div className="ih-sheet-head-right">
+          <Button variant="secondary" size="sm" onClick={() => actions.stop()}>
+            Stop
+            <Kbd keys={["Esc"]} />
+          </Button>
+        </div>
+      </div>
+      <div aria-hidden>
         {[72, 54, 64].map((w, i) => (
-          <div key={i}>
-            <div className="h-[18px] rounded-xs bg-surface-2" style={{ width: `${w}%` }} />
-            <div className="mt-5 h-px bg-surface-2" />
-            <div className="mt-4 flex gap-2">
-              <div className="h-8 w-28 rounded-xs bg-surface-2" />
-              <div className="h-8 w-24 rounded-xs bg-surface-2" />
-            </div>
+          <div key={i} className="ih-step" data-s="open">
+            <span className="ih-step-num">{i + 1}</span>
+            <span className="ih-skel h-[14px]" style={{ width: `${w}%` }} />
+            <span className="ih-skel h-[28px] w-[64px]" />
           </div>
         ))}
       </div>
-    </section>
-  );
-}
-
-/** "{n} answers  Show" summary after generation (DESIGN §6.4, §8). */
-export function AnswersSummary({
-  open,
-  onToggle,
-  right,
-}: {
-  open: boolean;
-  onToggle: () => void;
-  /** Right-aligned on the same line (the version switcher on desktop). */
-  right?: ReactNode;
-}) {
-  const { state } = useWorkspace();
-  const n = state.answers.length;
-  return (
-    <div>
-      <div className="flex min-h-7 items-center gap-3">
-        {n > 0 && (
-          <>
-            <span className="type-meta text-fg-subtle">{n === 1 ? "1 answer" : `${n} answers`}</span>
-            <Button variant="text" className="type-meta" aria-expanded={open} onClick={onToggle}>
-              {open ? "Hide" : "Show"}
-            </Button>
-          </>
-        )}
-        <div className="ml-auto">{right}</div>
+      <div className="ih-qfoot" aria-hidden>
+        <span className="ih-skel h-[38px] w-[170px]" />
       </div>
-      <AnimatePresence initial={false}>
-        {open && (
-          <motion.dl
-            className="-mx-2 overflow-hidden px-2"
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.2, ease: EASE_IN_OUT }}
-          >
-            <div className="flex flex-col gap-3 pb-1 pt-2">
-              {state.answers.map((a) => (
-                <div key={a.questionId}>
-                  <dt className="type-meta text-fg-subtle">{a.question}</dt>
-                  <dd className="type-input text-fg">{a.answer}</dd>
-                </div>
-              ))}
-            </div>
-          </motion.dl>
-        )}
-      </AnimatePresence>
-    </div>
+    </section>
   );
 }
