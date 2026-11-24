@@ -51,7 +51,14 @@ export function EngineDot({ kind }: { kind: EngineDotKind }) {
  * phones (under the composer, or in the prompt sheet header). "Preview data" appears only with the
  * dev mock client.
  */
-export function EngineIndicator({ placement = "topbar" }: { placement?: "topbar" | "inline" } = {}) {
+export function EngineIndicator({
+  placement = "topbar",
+  compact = false,
+}: {
+  placement?: "topbar" | "inline";
+  /** Dot only, with the label as its name (the phone sheet header, where the provenance line says it in full). */
+  compact?: boolean;
+} = {}) {
   const { aiStatus, aiStatusFailed, reloadAiStatus, preview, basic, state } = useWorkspace();
   const auth = useAuth();
   const kind: Kind = preview ? "preview" : aiStatus ? (basic ? "basic" : "ai") : aiStatusFailed ? "failed" : "loading";
@@ -88,10 +95,12 @@ export function EngineIndicator({ placement = "topbar" }: { placement?: "topbar"
           data-engine={kind}
           data-ai-status={ai?.status}
           data-placement={placement}
+          data-compact={compact || undefined}
+          aria-label={compact ? label : undefined}
           className="ih-engine"
         >
           <EngineDot kind={dot} />
-          <span>{label}</span>
+          {!compact && <span>{label}</span>}
         </button>
       </PopoverTrigger>
       <PopoverContent align={placement === "topbar" ? "end" : "start"}>

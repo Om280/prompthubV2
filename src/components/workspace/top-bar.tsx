@@ -62,17 +62,15 @@ export function TopBar({ accountSlot }: { accountSlot?: ReactNode }) {
             {!mobile && <span aria-hidden>History</span>}
           </Button>
         </Tip>
-        <Tip label="New prompt" keys={keys.newPrompt}>
-          <Button
-            variant={mobile ? "ghost" : "secondary"}
-            icon={!wide}
-            aria-label="New prompt"
-            onClick={newPrompt}
-          >
-            <Plus size={16} aria-hidden />
-            {wide && <span aria-hidden>New prompt</span>}
-          </Button>
-        </Tip>
+        {/* Phones: the mark starts a new prompt (and the palette lists it), so the bar fits at 360px. */}
+        {!mobile && (
+          <Tip label="New prompt" keys={keys.newPrompt}>
+            <Button variant="secondary" icon={!wide} aria-label="New prompt" onClick={newPrompt}>
+              <Plus size={16} aria-hidden />
+              {wide && <span aria-hidden>New prompt</span>}
+            </Button>
+          </Tip>
+        )}
         {accountSlot != null && (
           <div className="ih-account-slot" data-slot="account">
             {accountSlot}

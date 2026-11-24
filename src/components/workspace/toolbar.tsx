@@ -1,22 +1,18 @@
 "use client";
 
-import { ChevronDown, LoaderCircle, Maximize2, Minimize2, PenLine, RotateCw, type LucideIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { TONE_LABELS, type Tone } from "@/lib/contracts";
+import { ChevronDown, LoaderCircle, Lock, Maximize2, Minimize2, PenLine, RotateCcw, type LucideIcon } from "lucide-react";
+import { toast } from "sonner";
+import { TONE_LABELS, schemas, type Tone } from "@/lib/contracts";
 import { Button } from "@/components/ui/button";
-import { Kbd } from "@/components/ui/kbd";
 import { Menu, MenuContent, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "@/components/ui/menu";
 import { Tip } from "@/components/ui/tooltip";
-import { useIsMobile } from "@/hooks/use-media";
 import { latest, type Activity, type SessionState } from "@/hooks/use-session";
-import { cn } from "@/lib/utils";
-import { CopyButton } from "./copy-button";
 import { MAX_PROMPT_CHARS } from "./editor";
-import { BASIC_REASON, writingLabel } from "./labels";
-import { VersionSwitcher } from "./version-switcher";
+import { BASIC_REASON, SAME_PROMPT_NOTE } from "./labels";
 import { useWorkspace } from "./workspace-context";
 
-export const TONES: Tone[] = ["neutral", "friendly", "professional", "direct", "playful"];
+/** The tones from the contract, in its order. */
+export const TONES: Tone[] = [...schemas.Tone.options];
 
 export type RefineAction = "improve" | "shorten" | "expand" | "regenerate";
 
@@ -24,20 +20,20 @@ export const REFINE: { action: RefineAction; label: string; icon: LucideIcon }[]
   { action: "improve", label: "Improve", icon: PenLine },
   { action: "shorten", label: "Shorten", icon: Minimize2 },
   { action: "expand", label: "Expand", icon: Maximize2 },
-  { action: "regenerate", label: "Regenerate", icon: RotateCw },
+  { action: "regenerate", label: "Regenerate", icon: RotateCcw },
 ];
+
+export const AI_ACTIONS = REFINE.filter((r) => r.action !== "regenerate");
 
 export function currentTone(state: SessionState): Tone {
   const v = state.viewing !== null ? state.versions[state.viewing] : latest(state);
   return v?.source === "tone" && v.tone ? v.tone : "neutral";
 }
 
+export type RefineBlock = "busy" | "basic" | "viewing" | "long" | "empty";
+
 /** Why a refine/tone action is unavailable right now, or null when it can run. */
-export function refineBlock(
-  state: SessionState,
-  basic: boolean,
-  action: RefineAction | "tone",
-): "busy" | "basic" | "viewing" | "long" | "empty" | null {
+export function refineBlock(state: SessionState, basic: boolean, action: RefineAction | "tone"): RefineBlock | null {
   if (state.versions.length === 0) return "empty";
   if (state.stream) return "busy";
   if (basic && action !== "regenerate") return "basic";
@@ -46,145 +42,115 @@ export function refineBlock(
   return null;
 }
 
+export const BLOCK_REASONS: Record<RefineBlock, string> = {
+  basic: BASIC_REASON,
+  busy: "Wait for the current change to finish.",
+  viewing: "Restore this version, or go back to the latest, to change it.",
+  long: "This prompt is over 20,000 characters. Shorten it to refine it.",
+  empty: "Generate a prompt first.",
+};
+
 export function isActive(state: SessionState, action: Activity) {
   return state.stream?.activity === action;
 }
 
+/** A Needs AI click explains itself instead of doing nothing. */
+export function explain(block: RefineBlock) {
+  toast(BLOCK_REASONS[block], { id: `refine-${block}` });
+}
+
 /**
- * Sticky toolbar (DESIGN §6.6), inside the column: refine group and Tone on the left, Copy flush with
- * the column's right edge. The version switcher lives on the meta row under the title (≥640).
+ * The refine row under the blocks (DIRECTION-C §6). In Basic Mode the AI-only actions are dashed
+ * "Needs AI" buttons with a lock, and the reason sits under the row. With AI on they're filled
+ * secondary buttons and Tone opens its menu. Regenerate is always available.
  */
-export function Toolbar() {
-  const { state, actions, preview } = useWorkspace();
-  const mobile = useIsMobile();
-  const sentinel = useRef<HTMLDivElement>(null);
-  const [stuck, setStuck] = useState(false);
-
-  useEffect(() => {
-    const el = sentinel.current;
-    if (!el) return;
-    const io = new IntersectionObserver(([entry]) => setStuck(!entry.isIntersecting), {
-      rootMargin: "-57px 0px 0px 0px",
-      threshold: 0,
-    });
-    io.observe(el);
-    return () => io.disconnect();
-  }, []);
-
-  const streaming = !!state.stream;
-  const hasVersions = state.versions.length > 0;
-  const status = writingLabel(state, preview);
-  const stop = (
-    <Button variant="outline" className="hidden h-8 shrink-0 gap-2 px-3 sm:inline-flex" onClick={() => actions.stop()}>
-      Stop
-      <Kbd keys={["Esc"]} />
-    </Button>
-  );
-
+export function RefineBar() {
+  const { state, actions, basic } = useWorkspace();
+  const regen = refineBlock(state, basic, "regenerate");
   return (
-    <>
-      <div ref={sentinel} aria-hidden className="h-px" />
-      {/* Phones: the version switcher (or the stream status) gets its own row; actions live in the bottom bar. */}
-      <div className="flex min-h-12 items-center sm:hidden">
-        {streaming ? (
-          <p className="truncate type-ui text-fg-muted" aria-live="polite">
-            {status}
-          </p>
-        ) : (
-          mobile && <VersionSwitcher />
-        )}
-      </div>
-      <div
-        data-stuck={stuck || undefined}
-        className={cn(
-          "z-20 -mt-px hidden border-b border-transparent bg-bg sm:sticky sm:top-14 sm:block",
-          "data-[stuck]:border-border data-[stuck]:shadow-float",
-        )}
-      >
-        <div className="@container flex min-h-12 items-center gap-3">
-          {hasVersions ? (
-            <>
-              <div className="-ml-2 flex min-w-0 items-center gap-0.5 @min-[660px]:-ml-2.5">
-                {REFINE.map((r) => (
-                  <RefineButton key={r.action} {...r} />
-                ))}
-                <ToneMenu />
-              </div>
-              <div className="flex-1" />
-              <CopyButton />
-            </>
+    <div className="ih-sheet-foot" role="group" aria-label="Refine" aria-describedby={basic ? "basic-reason" : undefined}>
+      {AI_ACTIONS.map((r) => (
+        <RefineButton key={r.action} {...r} />
+      ))}
+      <ToneMenu />
+      <div className="ih-sheet-foot-end">
+        <Button
+          variant="secondary"
+          size="sm"
+          aria-disabled={regen ? true : undefined}
+          onClick={actions.regenerate}
+        >
+          {isActive(state, "regenerate") ? (
+            <LoaderCircle size={14} className="animate-spin" aria-hidden />
           ) : (
-            streaming && (
-              <>
-                <p className="truncate type-ui text-fg-muted" aria-live="polite">
-                  {status}
-                </p>
-                {stop}
-              </>
-            )
+            <RotateCcw size={14} aria-hidden />
           )}
-        </div>
+          Regenerate
+        </Button>
       </div>
-      {/* A regenerate or transform over an existing prompt: status and Stop sit just under the toolbar. */}
-      {hasVersions && streaming && (
-        <div className="mt-2 hidden items-center gap-3 sm:flex">
-          <p className="truncate type-ui text-fg-muted" aria-live="polite">
-            {status}
-          </p>
-          {stop}
-        </div>
+      {basic && (
+        <p className="ih-reason" id="basic-reason">
+          {BASIC_REASON}
+        </p>
       )}
-    </>
+      <SheetNotices />
+    </div>
   );
 }
 
 function RefineButton({ action, label, icon: Icon }: { action: RefineAction; label: string; icon: LucideIcon }) {
   const { state, actions, basic } = useWorkspace();
   const block = refineBlock(state, basic, action);
-  const spinning = isActive(state, action);
   const run = () => (action === "regenerate" ? actions.regenerate() : actions.transform(action));
-  return (
-    <Tip label={block === "basic" ? BASIC_REASON : label} className={block === "basic" ? "max-w-[300px]" : undefined}>
-      <Button
-        variant="ghost"
-        aria-disabled={block ? true : undefined}
-        aria-label={label}
-        className="gap-1.5 px-2 @min-[660px]:px-2.5"
-        onClick={run}
-      >
-        {spinning ? (
-          <LoaderCircle className="size-3.5 animate-spin" aria-hidden />
-        ) : (
-          <Icon className="size-3.5" aria-hidden />
-        )}
-        <span className="hidden @min-[660px]:inline">{label}</span>
-      </Button>
-    </Tip>
+  const button = (
+    <Button
+      variant={block === "basic" ? "needsAi" : "secondary"}
+      size="sm"
+      aria-disabled={block ? true : undefined}
+      onDisabledClick={block ? () => explain(block) : undefined}
+      onClick={run}
+    >
+      {block === "basic" ? (
+        <Lock size={13} aria-hidden />
+      ) : isActive(state, action) ? (
+        <LoaderCircle size={14} className="animate-spin" aria-hidden />
+      ) : (
+        <Icon size={14} aria-hidden />
+      )}
+      {label}
+    </Button>
   );
+  if (!block || block === "basic") return button;
+  return <Tip label={BLOCK_REASONS[block]}>{button}</Tip>;
 }
 
-function ToneMenu() {
+/** Tone: a menu of the contract's tones when AI can run; otherwise disabled with the reason. */
+export function ToneMenu() {
   const { state, actions, basic } = useWorkspace();
   const block = refineBlock(state, basic, "tone");
   const spinning = isActive(state, "tone");
   const trigger = (
-    <Button variant="ghost" aria-disabled={block ? true : undefined} className="gap-1 px-2 @min-[660px]:px-2.5">
-      {spinning && <LoaderCircle className="size-3.5 animate-spin" aria-hidden />}
+    <Button
+      variant={block === "basic" ? "needsAi" : "secondary"}
+      size="sm"
+      aria-disabled={block ? true : undefined}
+      onDisabledClick={block ? () => explain(block) : undefined}
+    >
+      {block === "basic" ? (
+        <Lock size={13} aria-hidden />
+      ) : spinning ? (
+        <LoaderCircle size={14} className="animate-spin" aria-hidden />
+      ) : null}
       Tone
-      <ChevronDown className="size-3.5" aria-hidden />
+      {block !== "basic" && <ChevronDown size={14} aria-hidden />}
     </Button>
   );
-  if (block) {
-    return (
-      <Tip label={block === "basic" ? BASIC_REASON : "Tone"} className="max-w-[300px]">
-        {trigger}
-      </Tip>
-    );
-  }
+  if (block === "basic") return trigger;
+  if (block) return <Tip label={BLOCK_REASONS[block]}>{trigger}</Tip>;
   return (
     <Menu>
       <MenuTrigger asChild>{trigger}</MenuTrigger>
-      <MenuContent align="end" className="min-w-[200px]">
+      <MenuContent align="start" className="min-w-[200px]">
         <MenuRadioGroup value={currentTone(state)} onValueChange={(v) => actions.transform("tone", v as Tone)}>
           {TONES.map((t) => (
             <MenuRadioItem key={t} value={t} label={TONE_LABELS[t]} />
@@ -192,5 +158,23 @@ function ToneMenu() {
         </MenuRadioGroup>
       </MenuContent>
     </Menu>
+  );
+}
+
+/** Short notes about the last action: stopped, same prompt, restored. */
+export function SheetNotices() {
+  const { state } = useWorkspace();
+  const n = state.notice;
+  if (!n || n.kind === "saved") return null;
+  const text =
+    n.kind === "stopped"
+      ? "Stopped. Kept what was written so far."
+      : n.kind === "same"
+        ? SAME_PROMPT_NOTE
+        : `Restored as version ${n.version}`;
+  return (
+    <p className="ih-notice" role="status">
+      {text}
+    </p>
   );
 }

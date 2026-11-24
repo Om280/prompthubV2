@@ -5,14 +5,10 @@ import { useWorkspace } from "@/components/workspace/workspace-context";
 
 function Keys({ keys }: { keys: string[] }) {
   return (
-    <span className="flex items-center gap-0.5">
-      <span className="sr-only">{keys.join(" ")}</span>
+    <span className="ih-kbd-group">
+      <span className="ih-sr">{keys.join(" ")}</span>
       {keys.map((k, i) => (
-        <kbd
-          key={`${k}-${i}`}
-          aria-hidden
-          className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-xs px-[5px] font-sans type-kbd text-fg-subtle shadow-[inset_0_0_0_1px_var(--color-border-control)]"
-        >
+        <kbd key={`${k}-${i}`} aria-hidden className="ih-kbd">
           {k}
         </kbd>
       ))}
@@ -20,11 +16,12 @@ function Keys({ keys }: { keys: string[] }) {
   );
 }
 
-/** "?" sheet (DESIGN §6.10). */
+/** "?" sheet: every shortcut, with the Alt N fallback for browsers that keep Ctrl/⌘ N. */
 export function ShortcutSheet() {
   const { shortcutsOpen, setShortcutsOpen, keys } = useWorkspace();
   const k = keys;
   const rows: { label: string; keys: string[][] }[] = [
+    { label: "Search or run a command", keys: [[k.mod, "K"]] },
     { label: "Generate or continue", keys: [[k.mod, k.enter]] },
     { label: "Copy prompt", keys: [[k.mod, k.shift, "C"]] },
     { label: "New prompt", keys: [[k.mod, "N"], [k.alt, "N"]] },
@@ -40,19 +37,19 @@ export function ShortcutSheet() {
       onOpenChange={setShortcutsOpen}
       title="Keyboard shortcuts"
       footer={
-        <p className="mt-5 type-meta text-fg-subtle">
+        <p className="ih-hint mt-4">
           If {k.mod} N opens a new window, use {k.alt} N.
         </p>
       }
     >
-      <dl className="flex flex-col">
+      <dl className="ih-shortcut-list">
         {rows.map((r) => (
-          <div key={r.label} className="flex min-h-9 items-center justify-between gap-4 border-b border-border last:border-b-0">
-            <dt className="type-ui text-fg">{r.label}</dt>
-            <dd className="flex items-center gap-1.5">
+          <div key={r.label} className="ih-shortcut-row">
+            <dt>{r.label}</dt>
+            <dd>
               {r.keys.map((combo, i) => (
                 <span key={combo.join("+")} className="flex items-center gap-1.5">
-                  {i > 0 && <span className="type-meta text-fg-subtle">or</span>}
+                  {i > 0 && <span>or</span>}
                   <Keys keys={combo} />
                 </span>
               ))}

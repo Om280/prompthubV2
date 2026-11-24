@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { clickGenerate, editor, enterIdea, generateFromIdea, openApp } from "./helpers";
+import { clickGenerate, editor, enterIdea, generateFromIdea, openApp, showPlainText } from "./helpers";
 
 test("11a. no AI in this build → Basic Mode is explained, never presented as AI", async ({ page, request }) => {
   const res = await request.get("/api/providers");
@@ -100,5 +100,6 @@ test("11e. a stream that drops mid-way keeps what was written", async ({ page })
   await expect(skipAll.or(page.getByText(/connection dropped/))).toBeVisible();
   if (await skipAll.isVisible()) await skipAll.click();
   await expect(page.getByText(/connection dropped/)).toBeVisible();
+  await showPlainText(page);
   expect(await editor(page).inputValue()).toContain("Write a toast");
 });

@@ -48,8 +48,7 @@ test("7. refinement in Basic Mode: AI-only actions explain themselves, Regenerat
   await expect(page.getByTestId("version-label")).toHaveAccessibleName("Version 1 of 1");
 
   // Length is a Basic Mode capability: Detailed gives a longer prompt.
-  await page.getByRole("button", { name: /Balanced/ }).click();
-  await page.getByRole("menuitemradio", { name: /Detailed/ }).click();
+  await page.getByRole("radio", { name: "Detailed", exact: true }).click();
   await page.getByRole("button", { name: "Regenerate as Detailed" }).click();
   const detailed = await waitForPrompt(page, "Version 2 of 2");
   expect(detailed.length).toBeGreaterThan(first.length);
