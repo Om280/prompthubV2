@@ -73,7 +73,7 @@ remaining Phase 4 work is 4.5 (a mobile pass on real devices) and the migration 
 | # | Task | Owner | Status |
 | --- | --- | --- | --- |
 | P.1 | Redesign: audit, three directions at `/design` (dev only); owner selected **Direction C "Interlock"**; A and B archived at tag `design-explorations-v1` | LEAD / FE | ✅ selected |
-| P.2 | Integrate Design C into `/` and every screen (`feature/design-c`) | FE | in progress |
+| P.2 | Integrate Design C into `/` and every screen (`feature/design-c`, `feature/ai-ui`) | FE | ✅ merged |
 | P.3 | Supabase Google sign-in (PKCE, `proxy.ts`, `getClaims()`), account menu, `/account`, `/privacy` | AI (auth) | ✅ merged (5184ec5) |
 | P.4 | Gemini free-tier-only architecture: allowlist, persistent atomic quota in Supabase (`supabase/migrations/0001_ai_quota.sql`), emergency switch, disclosure | AI (auth) | ✅ merged |
 | P.5 | Re-verify vendor prompting guidance and Gemini free-tier eligibility | LEAD | ✅ 2026-11-24 |
@@ -86,15 +86,18 @@ owner's real key happen only when the owner has configured it.
 
 | # | Task | Owner | Status |
 | --- | --- | --- | --- |
-| 3.1 | `server-only` guard on every module that reads secrets or calls Gemini | AI | in progress |
-| 3.2 | Gemini engine via `@ai-sdk/google` `createGoogle({apiKey})`, `maxRetries: 0`, no sampling params, thinking level configurable, no tools or grounding | AI | in progress |
-| 3.3 | Meta-prompts: clarify (structured), generate (brief → target profile), transforms (improve, shorten, expand, tone, regenerate) | AI | in progress |
-| 3.4 | Quota lease wiring: abort on disconnect, timeout, token reconcile, usage record; `quota_exhausted` with `resetsAt`, no retry, no fallback | AI | in progress |
-| 3.5 | Client: `requestId`/`workflowId`, Stop, new error states, draft kept | AI / FE | in progress |
-| 3.6 | Tone menu, AI states in the engine popover, first-use disclosure, usage remaining on `/account` | FE | in progress |
-| 3.7 | Tests with AI SDK mock models: per-target generation, transforms preserve requirements, no retry on 429, secret-leak scan | AI | in progress |
-| 3.8 | Opt-in `npm run eval:gemini` (real free-tier calls, request budget, never in CI) | AI / LEAD | in progress |
-| 3.9 | Manual smoke with the owner's key and Google OAuth credentials | LEAD + owner | waiting for credentials |
+| 3.1 | `server-only` guard on every module that reads secrets or calls Gemini | AI | ✅ |
+| 3.2 | Gemini engine via `@ai-sdk/google` `createGoogle({apiKey})`, `maxRetries: 0`, no sampling params, thinking level configurable, no tools or grounding | AI | ✅ |
+| 3.3 | Meta-prompts: clarify (structured), generate (brief → target profile), transforms (improve, shorten, expand, tone, regenerate) | AI | ✅ |
+| 3.4 | Quota lease wiring: abort on disconnect, timeout, token reconcile, usage record; `quota_exhausted` with `resetsAt`, no retry, no fallback | AI | ✅ |
+| 3.5 | Client: `requestId`/`workflowId`, Stop, new error states, draft kept | AI / FE | ✅ |
+| 3.6 | Tone menu, AI states in the engine popover, first-use disclosure, usage remaining on `/account` | FE | ✅ |
+| 3.7 | Tests with AI SDK mock models: per-target generation, transforms preserve requirements, no retry on 429, secret-leak scan | AI | ✅ |
+| 3.8 | Opt-in `npm run eval:gemini` (real free-tier calls, request budget, never in CI) | AI / LEAD | ✅ |
+| 3.9 | Manual smoke with the owner's key and Google OAuth credentials | LEAD + owner | partly: OAuth redirect chain verified to Google sign-in; Gemini key and model verified (models.get 200); generation calls blocked by Google 503 "high demand" on 2026-11-24 |
+
+
+**Phase 3 status (2026-11-24): ✅ built, merged and tested with fakes.** Unit 844, e2e 43 (desktop and mobile), build clean. Live checks: RLS isolation on the real database, OAuth PKCE redirect chain, API auth (401 for signed-out and forged sessions), no secrets in build output.
 
 ## Phase 4: History, versions, shortcuts, responsiveness
 

@@ -222,6 +222,8 @@ export interface GlobalCeilings {
   tpm: number;
   rpd: number;
   basis: LimitsBasis;
+  /** True when at least one AI_GLOBAL_* value was set explicitly. */
+  explicit?: boolean;
 }
 
 /**
@@ -246,6 +248,7 @@ export function globalCeilings(env: ServerEnv): GlobalCeilings {
     tpm: pick("tpm"),
     rpd: pick("rpd"),
     basis: supplied === 3 ? "project-ratio" : supplied === 0 ? "conservative-defaults" : "mixed",
+    explicit: g.rpm !== null || g.tpm !== null || g.rpd !== null,
   };
 }
 
@@ -255,5 +258,6 @@ export function describeCeilings(c: GlobalCeilings, ratio: number): string {
   const pct = `${Math.round(ratio * 100)}%`;
   if (c.basis === "project-ratio") return `${pct} of supplied project limits: ${nums}.`;
   if (c.basis === "mixed") return `Partly ${pct} of supplied project limits, partly conservative defaults: ${nums}.`;
+  if (c.explicit) return `App-wide limits set on this server (project limits not supplied): ${nums}.`;
   return `Conservative defaults (project limits not supplied): ${nums}.`;
 }

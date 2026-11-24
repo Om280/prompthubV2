@@ -283,7 +283,7 @@ describe("AI readiness and status", () => {
     const env = readServerEnv({ GEMINI_API_KEY: full.GEMINI_API_KEY, GEMINI_MODEL: "gemini-3.8-flash" });
     expect(aiReadiness({ env, quotaConfigured: true }).status).toBe("ready");
     const c = globalCeilings(env);
-    expect(c).toEqual({ ...AI_GLOBAL_DEFAULTS, basis: "conservative-defaults" });
+    expect(c).toEqual({ ...AI_GLOBAL_DEFAULTS, basis: "conservative-defaults", explicit: false });
     expect(AI_GLOBAL_DEFAULTS).toEqual({ rpm: 5, tpm: 100_000, rpd: 100 });
     const status = aiStatusResponse({ authConfigured: true, signedIn: true, env, readiness: aiReadiness({ env, quotaConfigured: true }) });
     expect(status.ai.limits).toEqual({
@@ -299,9 +299,12 @@ describe("AI readiness and status", () => {
       tpm: 5000,
       rpd: 20,
       basis: "conservative-defaults",
+      explicit: true,
     });
+    expect(describeCeilings(globalCeilings(readServerEnv({ AI_GLOBAL_RPM: "2" })), 0.7)).toMatch(/^App-wide limits set on this server/);
+    expect(describeCeilings(globalCeilings(readServerEnv({})), 0.7)).toMatch(/^Conservative defaults/);
     const project = readServerEnv(full); // 15 / 250,000 / 1,000
-    expect(globalCeilings(project)).toEqual({ rpm: 10, tpm: 175_000, rpd: 700, basis: "project-ratio" });
+    expect(globalCeilings(project)).toEqual({ rpm: 10, tpm: 175_000, rpd: 700, basis: "project-ratio", explicit: false });
     expect(describeCeilings(globalCeilings(project), 0.7)).toMatch(/^70% of supplied project limits: 10 requests\/min/);
     expect(globalCeilings(readServerEnv({ ...full, AI_GLOBAL_RPD: "50", AI_GLOBAL_RPM: "999" }))).toMatchObject({ rpm: 10, rpd: 50 });
     expect(globalCeilings(readServerEnv({ GEMINI_PROJECT_RPM: "100" }))).toMatchObject({ rpm: 70, tpm: 100_000, basis: "mixed" });
